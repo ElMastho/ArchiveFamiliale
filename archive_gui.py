@@ -502,11 +502,15 @@ class SourcesDialog(tk.Toplevel):
 
     def _remark(self, d) -> tuple[str, bool]:
         """(remarque, sélectionnable)"""
-        if core.read_marker(d.root):
-            return "Disque de l'archive : ne peut pas être importé", False
+        # Un disque de l'archive ou d'une sauvegarde n'est jamais une source, sauf s'il a été accepté
+        # comme tel à sa création (grand disque interne qui porte aussi l'archive dans un dossier à part).
         v = self.volume_by_serial.get(d.serial)
-        if v:
-            return (f"Contient aussi « {v['name']} » : ce dossier sera ignoré, seul le reste sera lu", True)
+        marker = core.read_marker(d.root) or core.read_marker(os.path.join(d.root, ARCHIVE_FOLDER))
+        if v or marker:
+            name = v["name"] if v else marker.get("name", "?")
+            if d.serial in self.source_by_serial and not core.read_marker(d.root):
+                return f"Contient aussi « {name} » : ce dossier sera ignoré, seul le reste sera lu", True
+            return f"Disque « {name} » de l'archive : il ne peut pas être importé", False
         if d.serial in self.source_by_serial:
             s = self.source_by_serial[d.serial]
             return ("Déjà importé entièrement" if s["completed"] else "Déjà vu : l'import reprendra où il en était"), True

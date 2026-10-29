@@ -730,6 +730,24 @@ class GuiTest(Base):
         self.assertIn("✅  Disque2", mb.showinfo.call_args[0][1])
         self.assertNotIn("file_import", archive_gui.load_config())
 
+    def test_archive_disks_not_importable(self):
+        """Dans le choix des disques à importer, les disques de l'archive sont grisés."""
+        from unittest import mock
+        import archive_gui
+        app = self.open_app()
+        serial = self.q("SELECT volume_serial FROM volumes")[0][0]
+        fake = [archive.Drive(self.master, "amovible", "Archive", "0000AAAA", "NTFS", 10, 5, 5),   # marqueur
+                archive.Drive(self.tmp, "amovible", "Archive", serial, "NTFS", 10, 5, 5),          # n° de série
+                archive.Drive(self.src1, "amovible", "Ancien", "0000BBBB", "NTFS", 10, 5, 5)]
+        with mock.patch.object(archive, "list_drives", lambda: fake), \
+                mock.patch.object(tk.Toplevel, "grab_set", lambda self: None):
+            dlg = archive_gui.SourcesDialog(app, True, "Importer", "")
+            dlg._check_all(True)
+            self.assertEqual([p for p, r in dlg.rows.items() if r["var"].get()], [self.src1])
+            self.assertFalse(dlg._remark(fake[0])[1])
+            self.assertFalse(dlg._remark(fake[1])[1])
+            dlg.destroy()
+
     def test_open_without_archive(self):
         shutil.rmtree(self.master)
         app = self.open_app()

@@ -2,6 +2,14 @@
 
 Les notes de chaque version publiée sur GitHub sont reprises de ce fichier.
 
+## [2.3.1] - 2026-10-29
+
+### Corrigé
+- « Importer des disques » : les disques de l'archive et des sauvegardes sont grisés et ne peuvent
+  plus être cochés, y compris quand l'archive est rangée dans un dossier `ArchiveFamiliale` du disque
+  (le cas habituel). Seule exception : un disque accepté dès le départ à la fois comme ancien disque
+  et comme disque de l'archive (grand disque interne d'un PC).
+
 ## [2.3.0] - 2026-10-29
 
 ### Importer plusieurs disques d'un coup
