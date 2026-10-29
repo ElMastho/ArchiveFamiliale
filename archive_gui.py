@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import math
 import os
 import queue
 import re
@@ -28,10 +29,12 @@ import unicodedata
 from collections import Counter
 import webbrowser
 import tkinter as tk
+import tkinter.font as tkfont
 from tkinter import ttk, messagebox, filedialog, simpledialog
 
 import archive as core
 import classement
+import bilan
 import maj
 import notif
 import theme
@@ -117,6 +120,12 @@ voir son détail et ses boutons.
    Photos et vidéos\\2009\\2009-08 Vacances Bretagne\\  ou  Documents\\Tableurs\\2012\\.
    Vous choisissez parmi 3 modèles, vous voyez un aperçu, puis vous validez. Annulable.
    Après de nouveaux imports, relancez-le : seuls les nouveaux fichiers seront rangés.
+
+7. Bilan : ce que contient l'archive
+   Combien de photos, de vidéos, de musiques, de documents… sur quelle période, et combien de
+   place prenaient les doublons, avec une frise des photos et vidéos année par année. Il
+   s'affiche tout seul à la fin d'un import. L'estimation rapide (étape 2) donne le même
+   aperçu pour des disques simplement branchés, sans rien copier.
 
 DISQUES INTERNES D'UN PC (TOUR)
 • Les disques internes apparaissent dans la liste comme les disques USB : on peut les importer.
@@ -968,7 +977,7 @@ class App(tk.Tk):
         self.minsize(min(w, int(1080 * k)), min(h, int(780 * k)))
 
     # ---------- construction ----------
-    STEP_ICONS = {1: "drive", 2: "import", 3: "verify", 4: "backup", 5: "check", 6: "sort"}
+    STEP_ICONS = {1: "drive", 2: "import", 3: "verify", 4: "backup", 5: "check", 6: "sort", 7: "chart"}
 
     def _tree(self, parent, cols, height):
         t = ttk.Treeview(parent, columns=[c for c, _, _ in cols], show="headings", height=height,
@@ -1080,6 +1089,7 @@ class App(tk.Tk):
                                         ("fichiers", "Fichiers", 80), ("taille", "Taille", 85),
                                         ("copies", "Nouveaux copiés", 130), ("etat", "Import", 210),
                                         ("controle", "Contrôle", 120)], 5)
+        self.tree_src.configure(selectmode="extended")
 
         self._step(3, "Vérifier l'archive",
                    "Relit chaque fichier de l'archive et le compare à son empreinte : on sait ainsi que "
@@ -1108,6 +1118,27 @@ class App(tk.Tk):
                    "Aperçu avant de valider, et annulable.",
                    [("Classer l'archive…", self.classify, True, False),
                     ("Annuler le dernier classement", self.undo_classify, False, False)])
+
+        s7 = self._step(7, "Bilan : ce que contient l'archive",
+                        "Tout ce qui a été trouvé sur les anciens disques, doublons retirés : combien de photos, "
+                        "de vidéos, de documents… et sur quelle période.",
+                        [("Actualiser le bilan", lambda: self.refresh_summary(force=True), False, False)])
+        both = ttk.Frame(s7, style="CardFlat.TFrame")   # tableau par type à gauche, frise à droite
+        both.pack(fill="both", expand=True)
+        both.columnconfigure(0, weight=5, uniform="bilan")
+        both.columnconfigure(1, weight=4, uniform="bilan")
+        left = ttk.Frame(both, style="CardFlat.TFrame")
+        left.grid(row=0, column=0, sticky="nsew", padx=(0, P(16)))
+        self.tree_kind = self._tree(left, [("type", "Type", 230), ("nombre", "Nombre", 100),
+                                           ("taille", "Taille", 100), ("periode", "Période", 120)], 9)
+        right = ttk.Frame(both, style="CardFlat.TFrame")
+        right.grid(row=0, column=1, sticky="nsew")
+        ttk.Label(right, text="PHOTOS ET VIDÉOS PAR ANNÉE", style="CardKicker.TLabel").pack(anchor="w", pady=(P(12), 0))
+        self.chart = tk.Canvas(right, height=P(170), background=theme.CARD, highlightthickness=0)
+        self.chart.pack(fill="x", pady=(P(4), 0))
+        self.chart.bind("<Configure>", lambda e: self._draw_chart())
+        self.summary = None        # dernier bilan calculé
+        self.summary_key = None    # état de l'archive au moment du calcul
 
         # Activité : opération en cours, progression, détail repliable
         self.act = ttk.Frame(outer, style="Card.TFrame", padding=(P(18), P(12), P(18), P(12)))
@@ -1154,7 +1185,7 @@ class App(tk.Tk):
         buttons : (texte, action, principal, sans_archive) ; sans_archive = utilisable sans archive."""
         P = theme.px
         # Ligne de la liste (cliquable)
-        row = ttk.Frame(self.nav, style="Row.TFrame", padding=(P(10), P(8), P(12), P(8)), cursor="hand2")
+        row = ttk.Frame(self.nav, style="Row.TFrame", padding=(P(10), P(6), P(12), P(6)), cursor="hand2")
         row.pack(fill="x", pady=P(1))
         row.columnconfigure(1, weight=1)
         glyph = ttk.Label(row, text=theme.kind_glyph("todo"), style="RowIcon.TLabel", anchor="center")
@@ -1214,6 +1245,100 @@ class App(tk.Tk):
         for k, s in self.steps.items():
             self._paint_row(k)
         self.steps[n]["panel"].tkraise()
+        if n == 7:
+            self.refresh_summary()
+
+    # ---------- bilan (étape 7) ----------
+    def refresh_summary(self, force=False):
+        """Calcule le bilan en arrière-plan (il peut parcourir des millions de lignes du catalogue)."""
+        st = self.st
+        if not st or not st["stored_n"]:
+            return
+        key = (self.master_path, st["stored_n"], st["last_change"], len(st["sources"]))
+        if (key == self.summary_key and not force) or getattr(self, "summary_busy", False):
+            return
+        self.summary_busy = True
+        self.steps[7]["status"].configure(text="Calcul du bilan…")
+        master = self.master_path
+
+        def worker():
+            try:
+                con = sqlite3.connect(os.path.join(master, core.CATALOG_DIR, core.DB_NAME), timeout=30)
+                try:
+                    self.q.put(("bilan", key, bilan.from_catalog(con)))
+                finally:
+                    con.close()
+            except sqlite3.Error as e:
+                self.q.put(("bilan", key, e))
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _show_summary(self, key, s):
+        self.summary_busy = False
+        if isinstance(s, Exception):
+            self.steps[7]["status"].configure(text=f"Bilan impossible à calculer : {s}")
+            return
+        self.summary, self.summary_key = s, key
+        t = self.tree_kind
+        t.delete(*t.get_children())
+        for _, label, n, b, per in s.rows():
+            when = "—" if not per else (f"{per[0]} – {per[1]}" if per[0] != per[1] else str(per[0]))
+            self._insert(t, (label[0].upper() + label[1:], core.fmt_int(n), core.fmt_size(b), when))
+        self._draw_chart()
+        self._update_steps()
+
+    def _draw_chart(self):
+        c = self.chart
+        c.delete("all")
+        mem = self.summary.memories_by_year() if self.summary else None
+        w, h = c.winfo_width(), c.winfo_height()
+        P = theme.px
+        if not mem or w < 50:
+            c.create_text(P(8), h // 2, anchor="w", fill=theme.MUTED, font="AFBody",
+                          text="Aucune photo ni vidéo datée pour l'instant." if self.summary else "")
+            return
+        years = list(range(min(mem), max(mem) + 1))
+        top = max(mem.values())
+        font = tkfont.nametofont("AFCaption")
+        text_h = font.metrics("linespace")
+        base = h - P(20)
+        # Axe vertical : 3 à 5 graduations « rondes » (1, 2 ou 5 × 10^n)
+        raw = top / 4
+        mag = 10 ** max(0, math.floor(math.log10(raw))) if raw >= 1 else 1
+        tick = next(k * mag for k in (1, 2, 5, 10) if k * mag >= raw)
+        axis_max = math.ceil(top / tick) * tick
+        left = font.measure(core.fmt_int(axis_max)) + P(12)
+        margin = P(18)   # les années aux deux bouts restent lisibles
+        slot = (w - left - margin) / len(years)
+        # Nombres à plat au-dessus des barres s'ils tiennent tous dans leur largeur ; sinon à la
+        # verticale, dans la barre (en blanc), ou juste au-dessus pour une barre trop courte.
+        flat = font.measure(core.fmt_int(top)) <= slot - P(2)
+        room = base - (text_h + P(4) if flat else text_h // 2 + P(2))   # hauteur de la graduation la plus haute
+        for k in range(0, axis_max + 1, tick):
+            gy = base - room * k / axis_max
+            c.create_line(left - P(4), gy, w - margin + P(4), gy, fill=theme.BORDER)
+            c.create_text(left - P(8), gy, anchor="e", fill=theme.MUTED, font="AFCaption", text=core.fmt_int(k))
+        c.create_line(left - P(4), base - room, left - P(4), base, fill=theme.FAINT)
+        bar = max(1.0, slot * 0.7)
+        step = next(k for k in (1, 2, 5, 10, 20, 50) if slot * k >= P(34))   # étiquettes lisibles
+        for i, y in enumerate(years):
+            x = left + i * slot + (slot - bar) / 2
+            cx = x + bar / 2
+            n = mem.get(y, 0)
+            if n:
+                hh = max(P(2), room * n / axis_max)
+                c.create_rectangle(x, base - hh, x + bar, base, fill=theme.ACCENT, width=0)
+                label = core.fmt_int(n)
+                tw = font.measure(label)
+                if flat:
+                    c.create_text(cx, base - hh - P(2), anchor="s", fill=theme.TEXT, font="AFCaption", text=label)
+                elif hh >= tw + P(8):
+                    c.create_text(cx, base - P(4), anchor="w", angle=90, fill="#FFFFFF", font="AFCaption",
+                                  text=label)
+                else:
+                    c.create_text(cx, base - hh - P(3), anchor="w", angle=90, fill=theme.TEXT, font="AFCaption",
+                                  text=label)
+            if (y - years[0]) % step == 0 or (y == years[-1] and (y - years[0]) % step >= step / 2):
+                c.create_text(cx, base + P(3), anchor="n", fill=theme.MUTED, font="AFCaption", text=str(y))
 
     def _hover_step(self, n, on):
         self.steps[n]["hover"] = on
@@ -1495,6 +1620,18 @@ class App(tk.Tk):
             self._set_step(6, "done", f"Classée selon le modèle {cm} ({classement.MODELS.get(cm, '')}) le "
                                       f"{short_date(st['meta'].get('classification_at'))}.", f"Modèle {cm}")
 
+        # Étape 7 : bilan
+        s = self.summary if self.summary_key and self.summary_key[0] == self.master_path else None
+        if not st["stored_n"]:
+            self._set_step(7, "todo", "Disponible après le premier import.", "Après les imports")
+        elif s:
+            self._set_step(7, "done", "\n".join(s.highlights(core.fmt_int, core.fmt_size)),
+                           f"{core.fmt_int(s.count['photo'])} photos, {core.fmt_int(s.count['video'])} vidéos")
+        elif not getattr(self, "summary_busy", False):
+            self._set_step(7, "done", "Ouvrez cette étape pour voir le bilan.", "Photos, vidéos, documents…")
+        if self.selected_step == 7:
+            self.refresh_summary()
+
         # Prochaine étape conseillée : une seule action, bien visible
         sets_late = any(s["backlog_n"] for s in st["sets"])
         iq = self.iq if self.iq and self.iq["paused"] and not self.busy else None
@@ -1565,7 +1702,8 @@ class App(tk.Tk):
                            ("Sans sauvegarde, par votre choix. " if no_backup else "") +
                            "Pensez à vérifier l'archive" + ("" if no_backup else " et les sauvegardes") +
                            " une fois par an." + ("  Facultatif : classer l'archive par type et par date "
-                                                  "(étape 6)." if not cm else ""))
+                                                  "(étape 6)." if not cm else ""),
+                           lambda: self.select_step(7), "Voir le bilan")
         if self.selected_step is None:
             self.select_step(n)
 
@@ -1666,6 +1804,8 @@ class App(tk.Tk):
                     self.progress["value"] = 0
                 elif kind == "done":
                     self._job_done(*msg[1:])
+                elif kind == "bilan":
+                    self._show_summary(*msg[1:])
                 elif kind.startswith("maj_"):
                     self._on_update_msg(kind, msg[1:])
         except queue.Empty:
@@ -1838,8 +1978,10 @@ class App(tk.Tk):
                        if e["new"] <= e["free"] else
                        f"Il manquera sans doute environ {core.fmt_size(e['new'] - e['free'])} : prévoyez un "
                        f"disque d'archive de plus (étape 1).")
+            content = e["summary"].text(core.fmt_int, core.fmt_size)
             messagebox.showinfo(APP_TITLE, f"Estimation rapide\n\n{lines}\n\nAu total : environ "
                                 f"{core.fmt_size(e['new'])} de nouveau à copier.\n{verdict}\n\n"
+                                f"Ce que contiennent ces disques :\n{content}\n\n"
                                 "C'est une estimation d'après le nom et la taille des fichiers ; l'import, qui "
                                 "compare leur contenu exact, trouvera souvent un peu plus de doublons.")
         self.run_jobs([("Estimation rapide", ["estimer", *(r["path"] for r in dlg.result), *self._m()])], done)
@@ -2046,6 +2188,7 @@ class App(tk.Tk):
                                    "Pour un disque en ⚠️ ou ❌ : rebranchez-le et relancez l'import ; les fichiers "
                                    "déjà traités sont sautés. Si le problème persiste, le disque est peut-être abîmé.")
         elif q["copy"]:
+            self.select_step(7)   # « qu'y avait-il dans tous ces disques ? »
             self.lbl_status.configure(text=f"Terminé : {q['n']} disque(s) importé(s), tout s'est bien passé.")
             messagebox.showinfo(APP_TITLE, f"Terminé, tout s'est bien passé :\n\n{lines}\n\n"
                                 "Vous pouvez éjecter ces disques (icône USB de Windows).")

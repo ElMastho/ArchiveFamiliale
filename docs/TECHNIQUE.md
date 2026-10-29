@@ -41,6 +41,8 @@ le programme. Le mode d'emploi grand public est dans le [README](../README.md).
 | `archive_gui.py` | Interface graphique Tkinter (surcouche du moteur). |
 | `theme.py` | Apparence : couleurs, polices, icônes, formes arrondies (thème Sun Valley si installé). |
 | `classement.py` | Classement par type / date / événement (lecture EXIF, vidéo, Office, PDF sans dépendance). |
+| `bilan.py` | Bilan : nombre de fichiers par famille (photos, vidéos, textes…), période couverte, répartition par année, place gagnée sur les doublons. |
+| `notif.py` | Notifications sur le téléphone (ntfy). |
 | `maj.py` | Mise à jour automatique depuis les releases GitHub (installateur ou version portable). |
 | `test_archive.py` | Tests de bout en bout : `python -m unittest -v test_archive` |
 | `build_exe.bat` | Génère l'exe, le zip portable, l'installateur et leurs empreintes dans `dist\`. |
@@ -90,6 +92,7 @@ python archive.py importer  E:\  -m F:\ArchiveFamiliale -l "Disque01-WD-bleu"
 python archive.py rapport        -m F:\ArchiveFamiliale
 python archive.py exporter       -m F:\ArchiveFamiliale
 python archive.py estimer   E:\ G:\ -m F:\ArchiveFamiliale
+python archive.py bilan           -m F:\ArchiveFamiliale
 python archive.py verifier       -m F:\ArchiveFamiliale [--rapide | --tout]
 python archive.py controler E:\  -m F:\ArchiveFamiliale -l "Disque01-WD-bleu" [--profond]
 python archive.py ajouter-disque H:\ArchiveFamiliale -m F:\ArchiveFamiliale --jeu Sauvegarde-A
@@ -108,6 +111,7 @@ python archive.py reparer-catalogue --copie G:\ArchiveFamiliale\_catalogue\catal
 | `init` | Crée l'archive et son disque `ARCHIVE-1`. |
 | `option` | `--sauvegardes non` : pas de jeu de sauvegarde, par choix (l'interface n'y pousse plus). `--sauvegardes oui` pour revenir en arrière. Créer un jeu réactive aussi les sauvegardes. |
 | `ajouter-disque` | Ajoute un disque à l'archive (`ARCHIVE-n`), ou à un jeu de sauvegarde avec `--jeu` (le jeu est créé s'il n'existe pas). Le dossier doit être vide. |
+| `bilan` | Ce que contient l'archive : nombre de photos, vidéos, documents… (doublons retirés), période couverte et place gagnée sur les doublons. Une date vient du contenu (si un classement l'a lue), sinon du nom du fichier, sinon de sa date de modification. |
 | `estimer` | Estimation **rapide** de ce que des disques apporteraient (noms et tailles des fichiers, comparés au catalogue et entre eux). Rien n'est lu ni enregistré ; utilisée par le bouton « Estimer la place nécessaire ». |
 | `scanner` | Calcule les empreintes **sans rien copier** (relit tout : aussi long qu'un import). Un `importer` qui suit réutilise ces empreintes. |
 | `importer` | Copie le contenu nouveau sur les disques de l'archive (voir [Performances](#performances)). `--ordre-dossiers` lit dossier par dossier au lieu de suivre l'emplacement physique des fichiers. |

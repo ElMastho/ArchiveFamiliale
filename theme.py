@@ -54,7 +54,7 @@ ICON = {
     "check": "", "sort": "", "sync": "", "help": "", "stop": "",
     "report": "", "list": "", "folder": "", "clock": "", "chevron": "",
     "chevron_down": "", "info": "", "done": "", "warn": "", "files": "",
-    "size": "", "speed": "", "lock": "",
+    "size": "", "speed": "", "lock": "", "chart": "",
 }
 
 ICON_FONT = None   # famille de police d'icônes disponible (fixée par apply)

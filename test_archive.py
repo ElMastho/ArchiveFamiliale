@@ -228,8 +228,32 @@ class SingleDiskTest(Base):
         self.assertEqual(self.q("SELECT COUNT(*) FROM occurrences")[0][0], before)
         self.assertEqual(self.q("SELECT COUNT(*) FROM sources")[0][0], 1)
         rows = archive.LAST_ESTIMATE["rows"]
+        self.assertEqual(archive.LAST_ESTIMATE["summary"].count["video"], 1)
+        self.assertIn("Ce que contiennent ces disques", out)
         self.assertEqual(rows[0]["new"], 5 * 5000)        # la vidéo ; IMG_001.JPG est déjà là
         self.assertEqual(rows[1]["new"], 0)               # disque déjà importé : rien de nouveau
+
+    def test_summary(self):
+        """Bilan : familles de fichiers, périodes, doublons retirés."""
+        import bilan
+        os.utime(os.path.join(self.src1, "Docs", "vide.txt"), (1.5e9, 1.5e9))   # 2017
+        write(os.path.join(self.src2, "Scans", "IMG_20050704_1.jpg"), b"vacances" * 100)
+        write(os.path.join(self.src2, "Bureau", "budget.xlsx"), b"chiffres" * 100)
+        run("importer", self.src1, "-m", self.master, "-l", "Disque1")
+        run("importer", self.src2, "-m", self.master, "-l", "Disque2")
+        with contextlib.closing(self.db()) as con:
+            s = bilan.from_catalog(con)
+        self.assertEqual(s.count["photo"], 3)            # IMG_001, IMG_002, IMG_20050704_1 (doublons retirés)
+        self.assertEqual(s.count["video"], 1)
+        self.assertEqual(s.count["Tableurs"], 1)
+        self.assertEqual(s.count["Textes"], 1)
+        self.assertEqual(s.years["photo"][2005], 1)      # date lue dans le nom du fichier
+        self.assertEqual(s.period("Textes"), (2017, 2017))
+        self.assertGreater(s.seen_n, s.unique_n)
+        rc, out = run("bilan", "-m", self.master)
+        self.assertEqual(rc, 0, out)
+        self.assertIn("3  photos", out)
+        self.assertIn("doublons", out)
 
     def test_check_source(self):
         run("importer", self.src1, "-m", self.master, "-l", "Disque1")
@@ -776,6 +800,27 @@ class GuiTest(Base):
         msg = mb.showinfo.call_args[0][1]
         self.assertLess(msg.index("Disque2"), msg.index("Disque1"))
         self.assertEqual(len(self.stored_paths()), 5)
+
+    def test_remove_planned_and_summary_step(self):
+        """« Retirer de la liste » enlève le disque sélectionné ; l'étape 7 affiche le bilan."""
+        run("importer", self.src1, "-m", self.master, "-l", "Disque1")
+        app = self.open_app()
+        app.plan_disks([{"path": self.src2, "label": "Disque2", "note": "", "serial": None, "size": 1}])
+        app.tree_src.selection_set("Disque2")
+        app.remove_planned()
+        self.assertIsNone(app.iq)
+        self.assertFalse(app.tree_src.exists("Disque2"))
+        app.select_step(7)
+        end = time.monotonic() + 30
+        while app.summary is None:
+            self.assertLess(time.monotonic(), end)
+            app.update()
+            time.sleep(0.02)
+        app.update_idletasks()
+        kinds = [app.tree_kind.item(i, "values")[0] for i in app.tree_kind.get_children()]
+        self.assertIn("Photos", kinds)
+        self.assertEqual(app.steps[7]["kind"], "done")
+        self.assertIn("doublons", app.steps[7]["status"].cget("text"))
 
     def test_archive_disks_not_importable(self):
         """Dans le choix des disques à importer, les disques de l'archive sont grisés."""

@@ -73,6 +73,7 @@ et à mesure.
 | 3️⃣ | **Vérifier l'archive** | Quand tout est importé, cliquez sur « Vérifier maintenant ». Le programme relit les fichiers et confirme que rien n'est abîmé (la fois suivante, il ne relit que les nouveaux). |
 | 4️⃣ | **Faire des sauvegardes** | Branchez un autre disque neuf et cliquez sur « Créer un jeu de sauvegarde ». Faites-en **deux**, et rangez-en un **hors de la maison** (chez un proche, au travail…). |
 | 5️⃣ | **Contrôler les anciens disques** | Un disque importé sans erreur est déjà contrôlé. Si vous l'avez modifié depuis, rebranchez-le et cliquez sur « Contrôler un ancien disque » : si la réponse est **OUI**, tout son contenu est dans l'archive. |
+| 📊 | **Le bilan** | À la fin, l'étape 7 répond à la grande question : qu'y avait-il dans tous ces disques ? Combien de photos, de vidéos, de documents, sur quelles années, et combien de place les doublons prenaient. |
 | ✨ | *Classer (facultatif)* | Rangez tout par type et par date : `Photos et vidéos / 2009 / 2009-08 Vacances Bretagne`. Vous voyez un aperçu avant de valider, et vous pouvez annuler. |
 
 ### Importer plusieurs disques d'un coup
@@ -99,6 +100,14 @@ fermer le programme, et même éteindre ou déplacer l'ordinateur : au prochain 
 d'attente est toujours là, et **« Démarrer l'import »** repart exactement là où vous en étiez.
 
 ![Un import en cours, avec la progression et le temps restant](docs/images/import-en-cours.png)
+
+### À la fin : le bilan
+
+Quand l'import est terminé, le programme ouvre l'étape 7 : **ce que contient votre archive**. Combien de
+photos, de vidéos, de musiques, de textes, de tableurs, de présentations, de PDF… et sur quelle
+période ; une frise des photos et vidéos année par année ; et la place que prenaient les doublons.
+
+![Le bilan : photos, vidéos, documents et leurs périodes](docs/images/bilan.png)
 
 ### Être prévenu sur son téléphone 📱
 
@@ -153,7 +162,8 @@ estimée. Vous pouvez arrêter et reprendre plus tard autant de fois que vous vo
 
 Cliquez sur « Estimer la place nécessaire » à l'étape 2 et cochez vos disques. En quelques minutes, sans
 rien copier, le programme estime ce qu'ils apporteraient de nouveau (en tenant compte des doublons
-évidents) et vous dit s'il faut prévoir un disque d'archive de plus.
+évidents) et vous dit s'il faut prévoir un disque d'archive de plus. Il donne aussi un premier aperçu de
+ce qu'ils contiennent : combien de photos, de vidéos, de documents, et sur quelles années.
 </details>
 
 <details>

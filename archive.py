@@ -44,7 +44,7 @@ import uuid
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 
-VERSION = "2.4.0"
+VERSION = "2.5.0"
 
 ARCHIVE_FOLDER = "ArchiveFamiliale"          # nom de dossier conseillé sur chaque disque
 CATALOG_DIR = "_catalogue"
@@ -1641,8 +1641,11 @@ def cmd_estimate(args) -> int:
     déjà présent » si un fichier de même nom et de même taille est déjà dans l'archive (ou plus haut
     dans la liste des disques estimés). Rien n'est écrit dans le catalogue."""
     global LAST_ESTIMATE
+    import bilan
     ar = Archive(args.master)
     try:
+        summary = bilan.Summary()   # ce que contiennent ces disques, doublons entre eux retirés
+        inner = set()
         known = {hash((size, rel.rsplit("/", 1)[-1].lower()))
                  for size, rel in ar.db.execute("SELECT size, relpath FROM occurrences "
                                                 "WHERE status IN ('copied','duplicate')")}
@@ -1669,6 +1672,11 @@ def cmd_estimate(args) -> int:
             total = dup = 0
             for e in entries:
                 key = hash((e.size, e.rel.rsplit("/", 1)[-1].lower()))
+                summary.seen_n += 1
+                summary.seen_b += e.size
+                if key not in inner or not e.size:
+                    inner.add(key)
+                    summary.add(e.rel, e.size, e.mtime_ns)
                 total += e.size
                 if e.size and key in known:
                     dup += e.size
@@ -1678,7 +1686,9 @@ def cmd_estimate(args) -> int:
             print(f"  {fmt_int(len(entries))} fichiers, {fmt_size(total)} — sans doute déjà présents : "
                   f"{fmt_size(dup)} — nouveaux : environ {fmt_size(total - dup)}")
         new = sum(r.get("new", 0) for r in rows)
-        LAST_ESTIMATE = {"rows": rows, "new": new, "free": max(free, 0)}
+        LAST_ESTIMATE = {"rows": rows, "new": new, "free": max(free, 0), "summary": summary}
+        print("\nCe que contiennent ces disques :")
+        print(summary.text(fmt_int, fmt_size))
         print(f"\nAu total, environ {fmt_size(new)} de nouveau à copier ; place libre sur l'archive : "
               f"{fmt_size(max(free, 0))}.")
         if new > free:
@@ -1686,6 +1696,22 @@ def cmd_estimate(args) -> int:
                   f"supplémentaire.")
         print("  (Estimation rapide, d'après le nom et la taille des fichiers : l'import, qui compare le "
               "contenu exact, trouvera parfois un peu plus de doublons.)")
+        return 0
+    finally:
+        ar.close()
+
+
+def cmd_summary(args) -> int:
+    """Bilan de l'archive : combien de photos, de vidéos, de documents… et sur quelle période."""
+    import bilan
+    ar = Archive(args.master)
+    try:
+        s = bilan.from_catalog(ar.db)
+        if not s.seen_n:
+            print("Rien n'a encore été importé.")
+            return 0
+        print("Ce que contient l'archive :")
+        print(s.text(fmt_int, fmt_size))
         return 0
     finally:
         ar.close()
@@ -2750,6 +2776,10 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("sources", nargs="+", metavar="SOURCE", help="disques ou dossiers à estimer")
     master_opt(sp)
     sp.set_defaults(func=cmd_estimate)
+
+    sp = sub.add_parser("bilan", help="ce que contient l'archive : photos, vidéos, documents… et leurs périodes")
+    master_opt(sp)
+    sp.set_defaults(func=cmd_summary)
 
     sp = sub.add_parser("rapport", help="état des disques, des sources et des sauvegardes")
     master_opt(sp)

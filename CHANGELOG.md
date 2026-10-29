@@ -2,9 +2,21 @@
 
 Les notes de chaque version publiée sur GitHub sont reprises de ce fichier.
 
-## [Non publié]
+## [2.5.0] - 2026-10-29
 
+### Le bilan : « qu'y avait-il dans tous ces disques ? »
+- Nouvelle étape 7 « Bilan : ce que contient l'archive », ouverte automatiquement à la fin d'un
+  import : nombre de photos, vidéos, musiques, textes, tableurs, présentations, PDF, e-mails et autres
+  fichiers (doublons retirés), avec la période couverte par chacun, la place occupée, et ce que les
+  doublons faisaient perdre.
+- Frise des photos et vidéos année par année, avec le nombre sur chaque barre.
+- L'estimation rapide donne le même aperçu pour des disques simplement branchés, sans rien copier.
+- Commande `bilan` en ligne de commande.
+
+### Divers
 - Le bouton « Téléphone… » devient « Notifications… ».
+- Corrigé : « Retirer de la liste » ne pouvait pas fonctionner, le tableau de l'étape 2 n'acceptait
+  aucune sélection.
 
 ## [2.4.0] - 2026-10-29
 
