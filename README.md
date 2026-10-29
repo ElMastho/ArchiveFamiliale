@@ -108,7 +108,7 @@ et sans compte.
 
 1. Sur le téléphone, installez l'application gratuite **ntfy** : Play Store (Android) ou App Store
    (iPhone), cherchez « ntfy ». À la première ouverture, acceptez les notifications.
-2. Dans Archive Familiale, cliquez sur **« Téléphone… »**, en haut de la fenêtre.
+2. Dans Archive Familiale, cliquez sur **« Notifications… »**, en haut de la fenêtre.
    - **Android** : visez le code carré avec l'appareil photo et touchez le lien qui apparaît. ntfy
      s'ouvre et s'abonne tout seul.
    - **iPhone** : dans ntfy, touchez **+**, recopiez le nom affiché (par exemple `archive-k3x9…`), puis

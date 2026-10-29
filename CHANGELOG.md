@@ -2,6 +2,10 @@
 
 Les notes de chaque version publiée sur GitHub sont reprises de ce fichier.
 
+## [Non publié]
+
+- Le bouton « Téléphone… » devient « Notifications… ».
+
 ## [2.4.0] - 2026-10-29
 
 ### Import en deux temps

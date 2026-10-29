@@ -142,7 +142,7 @@ CONSEILS
   disques, annonce une durée estimée et prévient si un disque semble branché en USB 2.
 
 ÊTRE PRÉVENU SUR SON TÉLÉPHONE
-• Bouton « Téléphone… » en haut : installez l'application gratuite ntfy, visez le code avec
+• Bouton « Notifications… » en haut : installez l'application gratuite ntfy, visez le code avec
   l'appareil photo (Android) ou recopiez le nom affiché (iPhone), puis envoyez un message d'essai.
 • Vous êtes prévenu à la fin de chaque disque, quand l'archive est pleine, à la fin de tout, et
   (si vous le voulez) toutes les heures avec l'avancement.
@@ -999,7 +999,7 @@ class App(tk.Tk):
                               f"version {core.VERSION}", style="Muted.TLabel").pack(anchor="w")
         ttk.Button(head, text="Aide", command=self.show_help).pack(side="right")
         ttk.Button(head, text="Mises à jour…", command=self.check_update).pack(side="right", padx=(0, P(8)))
-        ttk.Button(head, text="Téléphone…", command=lambda: NotifyDialog(self)).pack(side="right", padx=(0, P(8)))
+        ttk.Button(head, text="Notifications…", command=lambda: NotifyDialog(self)).pack(side="right", padx=(0, P(8)))
         self.btn_update = ttk.Button(head, text="", style="Accent.TButton", command=self.install_update)
 
         # Prochaine étape : une seule action conseillée, bien visible
