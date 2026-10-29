@@ -2,11 +2,13 @@
 import contextlib
 import hashlib
 import io
+import json
 import os
 import pathlib
 import shutil
 import sqlite3
 import tempfile
+import tkinter as tk
 import unittest
 import zipfile
 
@@ -601,6 +603,54 @@ class MultiDiskTest(Base):
         rc, out = run("rapport", "-m", v2)
         self.assertEqual(rc, 2)
         self.assertIn("ARCHIVE-1", out)
+
+
+class GuiTest(Base):
+    """L'interface s'ouvre, sans archive puis sur une archive, et réagit sans bloquer."""
+
+    def open_app(self):
+        import archive_gui
+        os.environ["APPDATA"] = os.path.join(self.tmp, "appdata")
+        write(os.path.join(self.tmp, "appdata", "ArchiveFamiliale", "config.json"),
+              json.dumps({"master": self.master, "verifier_maj": False}).encode())
+        try:
+            app = archive_gui.App()
+        except tk.TclError as e:   # pas d'écran (serveur sans bureau)
+            self.skipTest(f"pas d'affichage : {e}")
+        self.addCleanup(app.destroy)
+        app.update_idletasks()
+        return app
+
+    def setUp(self):
+        super().setUp()
+        self._appdata = os.environ.get("APPDATA")
+
+    def tearDown(self):
+        if self._appdata is not None:
+            os.environ["APPDATA"] = self._appdata
+        super().tearDown()
+
+    def test_open_with_archive(self):
+        run("importer", self.src1, "-m", self.master, "-l", "Disque1")
+        app = self.open_app()
+        self.assertEqual(app.stat["files"][0].cget("text"), "4")
+        self.assertEqual(app.steps[2]["kind"], "done")
+        self.assertIn("Vérifier", app.hero_title.cget("text"))
+        for n in range(1, 7):
+            app.select_step(n)
+        app.busy = True
+        app._set_activity("busy")
+        app.progress["value"] = 500
+        app.busy = False
+        app._set_activity("ok")
+        app.toggle_log(True)
+        app.update_idletasks()
+
+    def test_open_without_archive(self):
+        shutil.rmtree(self.master)
+        app = self.open_app()
+        self.assertIsNone(app.master_path)
+        self.assertEqual(app.hero_title.cget("text"), "Créer votre archive")
 
 
 class UpdateTest(unittest.TestCase):

@@ -31,15 +31,13 @@ from tkinter import ttk, messagebox, filedialog, simpledialog
 import archive as core
 import classement
 import maj
+import theme
 
 APP_TITLE = "Archive Familiale"
 ARCHIVE_FOLDER = core.ARCHIVE_FOLDER
 RECOMMENDED_BACKUPS = 2
 LOW_SPACE = 50 * 1024 ** 3     # en dessous : conseiller d'ajouter un disque
 
-COLOR_DONE = "#1a7f37"
-COLOR_WARN = "#b35900"
-COLOR_TODO = "#777777"
 
 HELP_TEXT = """\
 À QUOI SERT CE PROGRAMME ?
@@ -52,6 +50,11 @@ le programme continue sur le suivant. Collez une étiquette avec son nom sur cha
 ARCHIVE-1 est le disque principal : il contient le catalogue et doit être branché à chaque fois.
 
 LA PROCÉDURE, ÉTAPE PAR ÉTAPE
+
+Pas besoin de tout retenir : la carte bleue « Prochaine étape », en haut de la fenêtre, indique
+toujours quoi faire, avec un bouton pour le faire. À gauche, la liste des étapes : un rond vert
+coché quand une étape est faite, un triangle orange quand elle attend. Cliquez sur une étape pour
+voir son détail et ses boutons.
 
 1. Disques de l'archive
    Branchez un disque NEUF (vide) et cliquez sur « Créer l'archive… » : il devient ARCHIVE-1.
@@ -240,6 +243,16 @@ def suggest_label(base_name: str, existing: set[str]) -> str:
         n += 1
 
 
+def autowrap(label):
+    """Le texte se replie selon la largeur réellement disponible (écrans 100 % à 200 %). On ne réagit
+    qu'aux vrais changements de largeur : sinon, repli et largeur peuvent se relancer sans fin."""
+    def on_configure(e):
+        new = max(e.width - 4, 200)
+        if abs(new - int(str(label.cget("wraplength") or 0))) > 12:
+            label.configure(wraplength=new)
+    label.bind("<Configure>", on_configure)
+
+
 def short_date(iso) -> str:
     return (iso or "")[:16].replace("T", " ")
 
@@ -267,12 +280,14 @@ class DriveDialog(tk.Toplevel):
         self.title(title)
         self.transient(app)
         self.resizable(True, False)
-        frm = ttk.Frame(self, padding=16)
+        self.configure(background=theme.BG)
+        frm = ttk.Frame(self, padding=theme.px(20))
         frm.pack(fill="both", expand=True)
         ttk.Label(frm, text=intro, wraplength=760, justify="left").pack(anchor="w")
 
         cols = ("lecteur", "nom", "taille", "libre", "type", "remarque")
-        self.tree = ttk.Treeview(frm, columns=cols, show="headings", height=7, selectmode="browse")
+        self.tree = ttk.Treeview(frm, columns=cols, show="headings", height=7, selectmode="browse",
+                                 style="Data.Treeview")
         for c, label, w in (("lecteur", "Lecteur", 70), ("nom", "Nom du disque", 170),
                             ("taille", "Taille", 90), ("libre", "Libre", 90),
                             ("type", "Type", 90), ("remarque", "Remarque", 260)):
@@ -288,7 +303,7 @@ class DriveDialog(tk.Toplevel):
         if mode in ("source", "scan", "check"):
             ttk.Button(row, text="Choisir plutôt un dossier précis…",
                        command=self._pick_folder).pack(side="left", padx=8)
-        self.chosen = ttk.Label(frm, text="Aucun disque sélectionné.", foreground="#555")
+        self.chosen = ttk.Label(frm, text="Aucun disque sélectionné.", style="Muted.TLabel")
         self.chosen.pack(anchor="w", pady=(8, 4))
 
         self.var_label = tk.StringVar()
@@ -300,12 +315,12 @@ class DriveDialog(tk.Toplevel):
             ttk.Label(g, text="Nom à donner à ce disque :").grid(row=0, column=0, sticky="w", pady=3)
             ttk.Entry(g, textvariable=self.var_label, width=40).grid(row=0, column=1, sticky="w", padx=8)
             ttk.Label(g, text="(écrivez ce nom sur une étiquette collée sur le disque)",
-                      foreground="#666").grid(row=0, column=2, sticky="w")
+                      style="Muted.TLabel").grid(row=0, column=2, sticky="w")
             ttk.Label(g, text="Description :").grid(row=1, column=0, sticky="w", pady=3)
             ttk.Entry(g, textvariable=self.var_note, width=60).grid(row=1, column=1, columnspan=2,
                                                                    sticky="w", padx=8)
             ttk.Label(g, text="ex. : disque noir du bureau, étiquette « photos 2005 »",
-                      foreground="#666").grid(row=2, column=1, columnspan=2, sticky="w", padx=8)
+                      style="Muted.TLabel").grid(row=2, column=1, columnspan=2, sticky="w", padx=8)
         if mode == "check":
             g = ttk.Frame(frm)
             g.pack(fill="x", pady=4)
@@ -434,7 +449,8 @@ class ChoiceDialog(tk.Toplevel):
         self.result = None
         self.title(title)
         self.transient(app)
-        frm = ttk.Frame(self, padding=16)
+        self.configure(background=theme.BG)
+        frm = ttk.Frame(self, padding=theme.px(20))
         frm.pack(fill="both", expand=True)
         ttk.Label(frm, text=text, wraplength=480, justify="left").pack(anchor="w")
         self.var = tk.StringVar(value=options[0])
@@ -458,7 +474,8 @@ class ClassifyDialog(tk.Toplevel):
         self.result = None
         self.title("Classer l'archive")
         self.transient(app)
-        frm = ttk.Frame(self, padding=16)
+        self.configure(background=theme.BG)
+        frm = ttk.Frame(self, padding=theme.px(20))
         frm.pack(fill="both", expand=True)
         ttk.Label(frm, justify="left", wraplength=760, text=(
             "Les fichiers vont être rangés par type et par date. La date est lue dans les photos, les vidéos et "
@@ -473,7 +490,7 @@ class ClassifyDialog(tk.Toplevel):
             box.pack(fill="x")
             ttk.Radiobutton(box, text=f"{key}. {title}" + ("   (recommandé)" if key == "A" else ""),
                             variable=self.var, value=key, style="StepTitle.TRadiobutton").pack(anchor="w")
-            ttk.Label(box, text=classement.MODEL_EXAMPLES[key], font=("Consolas", 9), foreground="#444",
+            ttk.Label(box, text=classement.MODEL_EXAMPLES[key], font="AFMono", style="Muted.TLabel",
                       justify="left").pack(anchor="w", padx=(28, 0))
         b = ttk.Frame(frm)
         b.pack(fill="x", pady=(16, 0))
@@ -482,6 +499,34 @@ class ClassifyDialog(tk.Toplevel):
                    command=lambda: (setattr(self, "result", self.var.get()), self.destroy())).pack(side="right", padx=8)
         self.wait_visibility()
         self.grab_set()
+
+
+class SmoothProgress(ttk.Progressbar):
+    """Barre de progression qui glisse vers sa nouvelle valeur au lieu de sauter."""
+
+    def __init__(self, *a, **k):
+        super().__init__(*a, **k)
+        self._target = 0.0
+        self._shown = 0.0
+        self._job = None
+
+    def __setitem__(self, key, value):
+        if key != "value":
+            return super().__setitem__(key, value)
+        self._target = float(value)
+        if self._target < self._shown:   # nouvelle opération : on repart de zéro sans animation
+            self._shown = self._target
+            super().__setitem__("value", self._shown)
+        elif self._job is None:
+            self._step()
+
+    def _step(self):
+        self._job = None
+        gap = self._target - self._shown
+        self._shown = self._target if abs(gap) < 1 else self._shown + gap * 0.2
+        super().__setitem__("value", self._shown)
+        if self._shown != self._target:
+            self._job = self.after(16, self._step)
 
 
 class QueueWriter:
@@ -513,7 +558,7 @@ class App(tk.Tk):
         self.action_buttons: list[ttk.Button] = []
         core.Progress.hook = lambda frac, text: self.q.put(("progress", frac, text))
 
-        self._styles()
+        theme.apply(self)
         self._build()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         self.after(100, self._poll)
@@ -528,7 +573,7 @@ class App(tk.Tk):
         self.update_idletasks()
         sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
         k = float(self.tk.call("tk", "scaling")) / (96 / 72)   # 1.0 à 100 %, 2.0 à 200 %
-        w, h = int(1100 * k), max(self.winfo_reqheight(), int(900 * k))
+        w, h = int(1240 * k), max(self.winfo_reqheight(), int(900 * k))
         if w > sw * 0.95 or h > sh * 0.90:
             try:
                 self.state("zoomed")   # plein écran sur les petits écrans
@@ -536,133 +581,328 @@ class App(tk.Tk):
             except tk.TclError:
                 w, h = int(sw * 0.95), int(sh * 0.88)
         self.geometry(f"{w}x{h}+{(sw - w) // 2}+{max((sh - h) // 3, 0)}")
-        self.minsize(min(w, int(900 * k)), min(h, int(700 * k)))
+        self.minsize(min(w, int(1080 * k)), min(h, int(780 * k)))
 
     # ---------- construction ----------
-    def _styles(self):
-        s = ttk.Style(self)
-        base = ("Segoe UI", 10)
-        s.configure(".", font=base)
-        s.configure("Title.TLabel", font=("Segoe UI", 18, "bold"))
-        s.configure("StepTitle.TLabel", font=("Segoe UI", 12, "bold"))
-        s.configure("Glyph.TLabel", font=("Segoe UI Symbol", 22))
-        s.configure("Next.TLabel", font=("Segoe UI", 11, "bold"), foreground=COLOR_WARN)
-        s.configure("Accent.TButton", font=("Segoe UI", 10, "bold"))
-        s.configure("Treeview", rowheight=24)
-        s.configure("StepTitle.TRadiobutton", font=("Segoe UI", 11, "bold"))
+    STEP_ICONS = {1: "drive", 2: "import", 3: "verify", 4: "backup", 5: "check", 6: "sort"}
 
     def _tree(self, parent, cols, height):
-        t = ttk.Treeview(parent, columns=[c for c, _, _ in cols], show="headings", height=height)
+        t = ttk.Treeview(parent, columns=[c for c, _, _ in cols], show="headings", height=height,
+                         style="Data.Treeview", selectmode="none")
         for c, label, w in cols:
-            t.heading(c, text=label)
-            t.column(c, width=w, anchor="w")
-        t.grid(row=2, column=1, sticky="ew", pady=(4, 2), padx=(0, 8))
+            t.heading(c, text=label, anchor="w")
+            t.column(c, width=theme.px(w * 0.6), minwidth=theme.px(40), anchor="w", stretch=True)
+        t.tag_configure("odd", background=theme.STRIPE)
+        t.pack(fill="x", pady=(theme.px(12), 0))
         return t
 
+    def _icon_label(self, parent, name, style, fallback=""):
+        return ttk.Label(parent, text=theme.icon(name, fallback), style=style)
+
     def _build(self):
-        top = ttk.Frame(self, padding=(16, 12, 16, 4))
-        top.pack(fill="x")
-        ttk.Label(top, text="Archive Familiale", style="Title.TLabel").pack(side="left")
-        ttk.Label(top, text=f"version {core.VERSION}", foreground=COLOR_TODO).pack(side="left", padx=(10, 0), pady=(8, 0))
-        ttk.Button(top, text="? Aide / mode d'emploi", command=self.show_help).pack(side="right")
-        ttk.Button(top, text="Mises à jour…", command=self.check_update).pack(side="right", padx=(0, 8))
-        self.btn_update = ttk.Button(top, text="", style="Accent.TButton", command=self.install_update)
-        self.lbl_next = ttk.Label(self, text="", style="Next.TLabel", padding=(16, 0, 16, 6))
-        self.lbl_next.pack(fill="x")
+        P = theme.px
+        outer = ttk.Frame(self, padding=(P(22), P(16), P(22), P(14)))
+        outer.pack(fill="both", expand=True)
 
-        body = ttk.Frame(self, padding=(16, 0, 16, 0))
-        body.pack(fill="both", expand=True)
+        # En-tête : logo, nom, version, mises à jour, aide
+        head = ttk.Frame(outer)
+        head.pack(fill="x")
+        ttk.Label(head, text=theme.icon("shield", "AF"), style="Logo.TLabel").pack(side="left")
+        names = ttk.Frame(head)
+        names.pack(side="left", padx=(P(12), 0))
+        ttk.Label(names, text="Archive Familiale", style="Title.TLabel").pack(anchor="w")
+        ttk.Label(names, text=f"Vos photos, vidéos et documents réunis, sans doublons, en sécurité  ·  "
+                              f"version {core.VERSION}", style="Muted.TLabel").pack(anchor="w")
+        ttk.Button(head, text="Aide", command=self.show_help).pack(side="right")
+        ttk.Button(head, text="Mises à jour…", command=self.check_update).pack(side="right", padx=(0, P(8)))
+        self.btn_update = ttk.Button(head, text="", style="Accent.TButton", command=self.install_update)
 
+        # Prochaine étape : une seule action conseillée, bien visible
+        self.hero = ttk.Frame(outer, style="Hero.TFrame", padding=(P(20), P(16), P(20), P(16)))
+        self.hero.pack(fill="x", pady=(P(16), 0))
+        self.hero.columnconfigure(1, weight=1)
+        self.hero_icon = ttk.Label(self.hero, text="", style="HeroIconBig.TLabel")
+        self.hero_icon.grid(row=0, column=0, rowspan=3, sticky="n", padx=(0, P(16)))
+        self.hero_kicker = ttk.Label(self.hero, text="PROCHAINE ÉTAPE", style="HeroKicker.TLabel")
+        self.hero_kicker.grid(row=0, column=1, sticky="w")
+        self.hero_title = ttk.Label(self.hero, text="", style="HeroTitle.TLabel")
+        self.hero_title.grid(row=1, column=1, sticky="w")
+        self.hero_text = ttk.Label(self.hero, text="", style="HeroMuted.TLabel", justify="left")
+        self.hero_text.grid(row=2, column=1, sticky="ew", pady=(P(2), 0))
+        autowrap(self.hero_text)
+        self.hero_btn = ttk.Button(self.hero, text="", style="Big.Accent.TButton")
+        self.hero_btn.grid(row=0, column=2, rowspan=3, sticky="e", padx=(P(16), 0))
+        self.hero_btn._needs_master = False
+        self.hero_btn._only_without_master = False
+        self.action_buttons.append(self.hero_btn)
+
+        # Chiffres clés de l'archive
+        stats = ttk.Frame(outer, style="Card.TFrame", padding=(P(8), P(12), P(8), P(12)))
+        stats.pack(fill="x", pady=(P(12), 0))
+        self.stat = {}
+        for i, (key, ico, caption) in enumerate((("files", "files", "fichiers archivés"),
+                                                 ("size", "size", "au total"),
+                                                 ("disks", "drive", "disques d'archive"),
+                                                 ("backups", "backup", "sauvegardes à jour"))):
+            stats.columnconfigure(i * 2, weight=1, uniform="stat")
+            if i:
+                ttk.Separator(stats, orient="vertical").grid(row=0, column=i * 2 - 1, sticky="ns", pady=P(4))
+            tile = ttk.Frame(stats, style="CardFlat.TFrame", padding=(P(14), 0))
+            tile.grid(row=0, column=i * 2, sticky="ew")
+            self._icon_label(tile, ico, "CardIcon.TLabel").pack(side="left", padx=(0, P(12)))
+            box = ttk.Frame(tile, style="CardFlat.TFrame", padding=0)
+            box.pack(side="left", fill="x")
+            value = ttk.Label(box, text="—", style="CardBig.TLabel")
+            value.pack(anchor="w")
+            sub = ttk.Label(box, text=caption, style="CardMuted.TLabel")
+            sub.pack(anchor="w")
+            self.stat[key] = (value, sub)
+
+        # Étapes (à gauche) et détail de l'étape choisie (à droite)
+        main = ttk.Frame(outer)   # placé en dernier (plus bas) : l'activité garde toujours sa place
+        main.columnconfigure(1, weight=1)
+        main.rowconfigure(0, weight=1)
+        nav = ttk.Frame(main, style="Card.TFrame", padding=P(8))
+        nav.grid(row=0, column=0, sticky="nsw", padx=(0, P(12)))
+        ttk.Label(nav, text="LES ÉTAPES", style="CardKicker.TLabel", padding=(P(10), P(6), 0, P(6))).pack(anchor="w")
+        self.detail = ttk.Frame(main, style="Card.TFrame", padding=(P(24), P(20), P(24), P(20)))
+        self.detail.grid(row=0, column=1, sticky="nsew")
+        self.detail.columnconfigure(0, weight=1)
+        self.detail.rowconfigure(0, weight=1)
+        self.nav = nav
         self.steps = {}
-        s1 = self._step(body, 1, "Disques de l'archive",
+        self.selected_step = None
+
+        s1 = self._step(1, "Disques de l'archive",
+                        "Les disques neufs qui contiennent l'archive. ARCHIVE-1 garde le catalogue : "
+                        "il doit être branché à chaque fois.",
                         [("Créer l'archive…", self.create_archive, True, True),
                          ("Ajouter un disque à l'archive…", self.add_main_disk, True, False),
                          ("Ouvrir une archive existante…", self.open_archive, False, True)])
         self.tree_vol = self._tree(s1, [("disque", "Disque", 130), ("branche", "Branché ?", 170),
                                         ("fichiers", "Fichiers", 90), ("donnees", "Données", 100),
-                                        ("libre", "Libre", 100), ("verif", "Vérification (étape 3)", 230)], 3)
+                                        ("libre", "Libre", 100), ("verif", "Vérification", 200)], 3)
 
-        s2 = self._step(body, 2, "Importer les anciens disques, un par un",
+        s2 = self._step(2, "Importer les anciens disques",
+                        "Branchez un ancien disque à la fois. Son contenu nouveau est copié dans l'archive ; "
+                        "l'ancien disque n'est jamais modifié.",
                         [("Importer un disque…", lambda: self.add_source(copy=True), True, False),
                          ("Estimer sans copier…", lambda: self.add_source(copy=False), False, False)])
-        self.tree_src = self._tree(s2, [("nom", "Nom", 160), ("desc", "Description", 210),
+        self.tree_src = self._tree(s2, [("nom", "Nom", 160), ("desc", "Description", 190),
                                         ("fichiers", "Fichiers", 80), ("taille", "Taille", 85),
-                                        ("copies", "Nouveaux copiés", 120), ("etat", "Import", 150),
-                                        ("controle", "Contrôle (étape 5)", 150)], 4)
+                                        ("copies", "Nouveaux copiés", 130), ("etat", "Import", 130),
+                                        ("controle", "Contrôle", 120)], 5)
 
-        self._step(body, 3, "Vérifier l'archive",
+        self._step(3, "Vérifier l'archive",
+                   "Relit chaque fichier de l'archive et le compare à son empreinte : on sait ainsi que "
+                   "rien n'est abîmé. À faire une fois tous les anciens disques importés, puis une fois par an.",
                    [("Vérifier maintenant", self.verify_master, True, False)])
 
-        s4 = self._step(body, 4, f"Jeux de sauvegarde (au moins {RECOMMENDED_BACKUPS}, dont un hors de la maison)",
+        s4 = self._step(4, "Sauvegardes",
+                        f"Des copies complètes de l'archive sur d'autres disques. Au moins {RECOMMENDED_BACKUPS} jeux "
+                        "conseillés, dont un rangé hors de la maison.",
                         [("Créer un jeu de sauvegarde…", self.create_set, True, False),
-                         ("Ajouter un disque à un jeu…", self.add_set_disk, False, False),
                          ("Mettre à jour les sauvegardes", self.update_backups, True, False),
+                         ("Ajouter un disque à un jeu…", self.add_set_disk, False, False),
                          ("Vérifier une sauvegarde…", self.verify_backups, False, False),
                          ("Je ne veux pas de sauvegarde…", self.toggle_backups, False, False)])
         self.btn_toggle_backups = self.action_buttons[-1]
-        self.tree_set = self._tree(s4, [("jeu", "Jeu", 120), ("disques", "Disques (✓ = branché)", 360),
-                                        ("etat", "État", 170), ("maj", "Dernière mise à jour", 140),
-                                        ("verif", "Dernière vérification", 150)], 2)
+        self.tree_set = self._tree(s4, [("jeu", "Jeu", 120), ("disques", "Disques (✓ = branché)", 300),
+                                        ("etat", "État", 170), ("maj", "Dernière mise à jour", 150),
+                                        ("verif", "Dernière vérification", 150)], 3)
 
-        self._step(body, 5, "Contrôler un ancien disque avant de le ranger",
+        self._step(5, "Contrôler les anciens disques",
+                   "Avant de ranger ou de donner un ancien disque : le programme confirme que tout son contenu "
+                   "est bien dans l'archive.",
                    [("Contrôler un ancien disque…", self.check_source, True, False)])
-        self._step(body, 6, "Classer l'archive par type et par date (facultatif)",
+        self._step(6, "Classer par type et par date",
+                   "Facultatif. Range les fichiers en « Photos et vidéos / 2009 / 2009-08 Vacances Bretagne »… "
+                   "Aperçu avant de valider, et annulable.",
                    [("Classer l'archive…", self.classify, True, False),
                     ("Annuler le dernier classement", self.undo_classify, False, False)])
 
-        act = ttk.LabelFrame(self, text=" Activité ", padding=10)
-        act.pack(fill="both", expand=False, padx=16, pady=(6, 4))
-        row = ttk.Frame(act)
-        row.pack(fill="x")
-        self.progress = ttk.Progressbar(row, mode="determinate", maximum=1000)
-        self.progress.pack(side="left", fill="x", expand=True)
-        self.btn_stop = ttk.Button(row, text="■ Arrêter", command=self.stop, state="disabled")
-        self.btn_stop.pack(side="left", padx=(8, 0))
-        self.lbl_status = ttk.Label(act, text="Prêt.", foreground="#333")
-        self.lbl_status.pack(anchor="w", pady=(4, 4))
-        logf = ttk.Frame(act)
-        logf.pack(fill="both", expand=True)
-        self.txt = tk.Text(logf, height=7, wrap="word", font=("Consolas", 9), state="disabled",
-                           background="#fafafa")
-        sb = ttk.Scrollbar(logf, command=self.txt.yview)
+        # Activité : opération en cours, progression, détail repliable
+        self.act = ttk.Frame(outer, style="Card.TFrame", padding=(P(18), P(12), P(18), P(12)))
+        self.act.columnconfigure(1, weight=1)
+        self.act_icon = ttk.Label(self.act, text=theme.icon("info", "•"), style="CardIcon.TLabel")
+        self.act_icon.grid(row=0, column=0, rowspan=2, sticky="w", padx=(0, P(12)))
+        self.lbl_status = ttk.Label(self.act, text="Prêt.", style="CardStrong.TLabel")
+        self.lbl_status.grid(row=0, column=1, sticky="w")
+        self.progress = SmoothProgress(self.act, mode="determinate", maximum=1000)
+        self.progress.grid(row=1, column=1, sticky="ew", pady=(P(6), 0))
+        self.btn_log = ttk.Button(self.act, text="Afficher le détail", style="Toolbutton", command=self.toggle_log)
+        self.btn_log.grid(row=0, column=2, rowspan=2, padx=(P(12), 0))
+        self.btn_stop = ttk.Button(self.act, text="Arrêter", command=self.stop, state="disabled")
+        self.btn_stop.grid(row=0, column=3, rowspan=2, padx=(P(8), 0))
+        self.logf = ttk.Frame(self.act, style="CardFlat.TFrame", padding=0)
+        self.txt = tk.Text(self.logf, height=8, wrap="word", font="AFMono", state="disabled", relief="flat",
+                           background=theme.STRIPE, foreground=theme.TEXT, padx=P(10), pady=P(8),
+                           highlightthickness=0, borderwidth=0)
+        sb = ttk.Scrollbar(self.logf, command=self.txt.yview)
         self.txt.configure(yscrollcommand=sb.set)
         self.txt.pack(side="left", fill="both", expand=True)
         sb.pack(side="right", fill="y")
+        self.log_visible = False
 
-        bottom = ttk.Frame(self, padding=(16, 2, 16, 10))
-        bottom.pack(fill="x")
+        # Liens utiles
+        bottom = ttk.Frame(outer)
+        bottom.pack(fill="x", side="bottom", pady=(P(10), 0))
+        self.act.pack(fill="x", side="bottom", pady=(P(12), 0))
+        main.pack(fill="both", expand=True, pady=(P(12), 0))
         for text, cmd in (("Rapport détaillé", self.show_report),
                           ("Exporter les listes (Excel)", self.export_csv),
                           ("Ouvrir le dossier de l'archive", self.open_folder),
                           ("Ouvrir le journal", self.open_log)):
-            b = ttk.Button(bottom, text=text, command=cmd)
-            b.pack(side="left", padx=(0, 8))
+            b = ttk.Button(bottom, text=text, command=cmd, style="Toolbutton")
+            b.pack(side="left", padx=(0, P(4)))
             b._needs_master = True
             b._only_without_master = False
             self.action_buttons.append(b)
+        ttk.Label(bottom, text="Les anciens disques ne sont jamais modifiés : ils sont seulement lus.",
+                  style="Muted.TLabel").pack(side="right")
 
-    def _step(self, parent, n, title, buttons):
-        """buttons : (texte, action, principal, sans_archive) ; sans_archive = utilisable sans archive."""
-        f = ttk.Frame(parent, padding=(8, 6), relief="groove", borderwidth=1)
-        f.pack(fill="x", pady=4)
+    def _step(self, n, title, intro, buttons):
+        """Une ligne dans la liste des étapes, et son panneau de détail.
+        buttons : (texte, action, principal, sans_archive) ; sans_archive = utilisable sans archive."""
+        P = theme.px
+        # Ligne de la liste (cliquable)
+        row = ttk.Frame(self.nav, style="Row.TFrame", padding=(P(10), P(8), P(12), P(8)), cursor="hand2")
+        row.pack(fill="x", pady=P(1))
+        row.columnconfigure(1, weight=1)
+        glyph = ttk.Label(row, text=theme.kind_glyph("todo"), style="RowIcon.TLabel", width=2)
+        glyph.grid(row=0, column=0, rowspan=2, sticky="w", padx=(0, P(10)))
+        name = ttk.Label(row, text=f"{n}. {title}", style="RowStrong.TLabel")
+        name.grid(row=0, column=1, sticky="w")
+        short = ttk.Label(row, text="", style="RowMuted.TLabel")
+        short.grid(row=1, column=1, sticky="w")
+        chevron = ttk.Label(row, text=theme.icon("chevron", "›"), style="RowFaint.TLabel")
+        chevron.grid(row=0, column=2, rowspan=2, sticky="e", padx=(P(10), 0))
+        parts = (row, glyph, name, short, chevron)
+        for w in parts:
+            w.bind("<Button-1>", lambda e, k=n: self.select_step(k))
+            w.bind("<Enter>", lambda e, k=n: self._hover_step(k, True))
+            w.bind("<Leave>", lambda e, k=n: self._hover_step(k, False))
+
+        # Panneau de détail
+        f = ttk.Frame(self.detail, style="CardFlat.TFrame", padding=0)
+        f.grid(row=0, column=0, sticky="nsew")
         f.columnconfigure(1, weight=1)
-        glyph = ttk.Label(f, text="○", style="Glyph.TLabel", width=2, anchor="center")
-        glyph.grid(row=0, column=0, rowspan=2, sticky="n", padx=(0, 8))
-        ttk.Label(f, text=f"{n}. {title}", style="StepTitle.TLabel").grid(row=0, column=1, sticky="w")
-        status = ttk.Label(f, text="", justify="left")
-        status.grid(row=1, column=1, sticky="ew")
-        # le texte se replie selon la largeur réellement disponible (écrans 100 % à 200 %)
-        status.bind("<Configure>", lambda e, lb=status: lb.configure(wraplength=max(e.width - 4, 200)))
-        bf = ttk.Frame(f)
-        bf.grid(row=0, column=2, rowspan=3, sticky="ne")
+        head = ttk.Frame(f, style="CardFlat.TFrame", padding=0)
+        head.pack(fill="x")
+        self._icon_label(head, self.STEP_ICONS[n], "CardIconBig.TLabel").pack(side="left", padx=(0, P(14)))
+        names = ttk.Frame(head, style="CardFlat.TFrame", padding=0)
+        names.pack(side="left", fill="x", expand=True)
+        ttk.Label(names, text=f"ÉTAPE {n}", style="CardKicker.TLabel").pack(anchor="w")
+        ttk.Label(names, text=title, style="CardTitle.TLabel").pack(anchor="w")
+        pill = ttk.Label(head, text="", style="Pilltodo.TLabel")
+        pill.pack(side="right", anchor="n")
+        intro_lbl = ttk.Label(f, text=intro, style="CardMuted.TLabel", justify="left")
+        intro_lbl.pack(anchor="w", fill="x", pady=(P(12), 0))
+        autowrap(intro_lbl)
+        status = ttk.Label(f, text="", style="Card.TLabel", justify="left")
+        status.pack(anchor="w", fill="x", pady=(P(10), 0))
+        autowrap(status)
+        bf = ttk.Frame(f, style="CardFlat.TFrame", padding=0)
+        bf.pack(fill="x", side="bottom", pady=(P(16), 0))   # avant le tableau : jamais écrasés
+        body = ttk.Frame(f, style="CardFlat.TFrame", padding=0)
+        body.pack(fill="both", expand=True)
+        rows = {True: ttk.Frame(bf, style="CardFlat.TFrame", padding=0),
+                False: ttk.Frame(bf, style="CardFlat.TFrame", padding=0)}
+        rows[True].pack(fill="x")
+        rows[False].pack(fill="x")   # actions secondaires sur une 2e ligne : jamais coupées
         for text, cmd, primary, without in buttons:
-            b = ttk.Button(bf, text=text, command=cmd, style="Accent.TButton" if primary else "TButton")
-            b.pack(side="top", fill="x", pady=1)
+            b = ttk.Button(rows[primary], text=text, command=cmd, style="Accent.TButton" if primary else "TButton")
+            b.pack(side="left", padx=(0, P(8)), pady=(0, P(6)))
             b._needs_master = not without
             b._only_without_master = (cmd == self.create_archive)
             self.action_buttons.append(b)
-        self.steps[n] = {"frame": f, "glyph": glyph, "status": status}
-        return f
+        self.steps[n] = {"row": parts, "glyph": glyph, "short": short, "pill": pill, "status": status,
+                         "panel": f, "kind": "todo", "hover": False}
+        return body
+
+    def select_step(self, n):
+        self.selected_step = n
+        for k, s in self.steps.items():
+            self._paint_row(k)
+        self.steps[n]["panel"].tkraise()
+
+    def _hover_step(self, n, on):
+        self.steps[n]["hover"] = on
+        self._paint_row(n)
+
+    def _paint_row(self, n):
+        s = self.steps[n]
+        base = "RowSel" if n == self.selected_step else ("RowHover" if s["hover"] else "Row")
+        row, glyph, name, short, chevron = s["row"]
+        row.configure(style=f"{base}.TFrame")
+        glyph.configure(style=f"{base}Icon.TLabel", foreground=theme.KINDS[s["kind"]][1])
+        name.configure(style=f"{base}Strong.TLabel")
+        short.configure(style=f"{base}Muted.TLabel")
+        chevron.configure(style=f"{base}Faint.TLabel")
+
+    def toggle_log(self, show=None):
+        self.log_visible = (not self.log_visible) if show is None else show
+        if self.log_visible:
+            self.logf.grid(row=2, column=0, columnspan=4, sticky="nsew", pady=(theme.px(10), 0))
+            self.txt.see("end")
+        else:
+            self.logf.grid_remove()
+        self.btn_log.configure(text="Masquer le détail" if self.log_visible else "Afficher le détail")
+
+    def _set_activity(self, state):
+        """Carte « Activité » : bleue avec une icône qui pulse pendant une opération, puis le résultat."""
+        busy = state == "busy"
+        base = "Busy" if busy else "Card"
+        self.act.configure(style=f"{base}.TFrame")
+        self.lbl_status.configure(style=f"{base}Strong.TLabel")
+        glyph, color = {"busy": ("sync", theme.ACCENT), "ok": ("done", theme.OK), "warn": ("warn", theme.WARN),
+                        "error": ("warn", theme.DANGER), "idle": ("info", theme.ACCENT)}[state]
+        self.act_icon.configure(text=theme.icon(glyph, "•"), style=f"{base}Icon.TLabel", foreground=color)
+        if state in ("warn", "error"):
+            self.toggle_log(True)
+        if busy and not getattr(self, "_pulsing", False):
+            self._pulsing = True
+            self._pulse(0)
+
+    def _pulse(self, i):
+        """Pulsation lente de l'icône d'activité : on voit que le programme travaille, sans agitation."""
+        if not self.busy:
+            self._pulsing = False
+            return
+        self.act_icon.configure(foreground=(theme.ACCENT, theme.ACCENT_BORDER)[i % 2])
+        self.after(700, self._pulse, i + 1)
+
+    def _set_hero(self, kind, kicker, title, text, action=None, label=""):
+        """kind : 'next' (bleu) | 'ok' (vert) | 'warn' (ambre)."""
+        base = {"next": "Hero", "ok": "HeroOk", "warn": "HeroWarn"}[kind]
+        icon = {"next": theme.icon("chevron", "➜"), "ok": theme.icon("done", "✔"),
+                "warn": theme.icon("warn", "!")}[kind]
+        self.hero.configure(style=f"{base}.TFrame")
+        self.hero_icon.configure(text=icon, style=f"{base}IconBig.TLabel")
+        self.hero_kicker.configure(text=kicker, style=f"{base}Kicker.TLabel")
+        self.hero_title.configure(text=title, style=f"{base}Title.TLabel")
+        self.hero_text.configure(text=text, style=f"{base}Muted.TLabel")
+        self.hero_action = action
+        if action:
+            self.hero_btn.configure(text=label, command=action)
+            self.hero_btn.grid()
+        else:
+            self.hero_btn.grid_remove()
+
+    def _set_stats(self, st):
+        if not st:
+            for key, (value, _) in self.stat.items():
+                value.configure(text="—")
+            return
+        vols = st["main_vols"]
+        plugged = sum(1 for v in vols if v["path"])
+        up = sum(1 for s in st["sets"] if s["backlog_n"] == 0 and st["stored_n"] > 0)
+        self.stat["files"][0].configure(text=core.fmt_int(st["stored_n"]))
+        self.stat["size"][0].configure(text=core.fmt_size(st["stored_b"]))
+        self.stat["disks"][0].configure(text=str(len(vols)))
+        self.stat["disks"][1].configure(text="disques, " + (
+            "tous branchés" if plugged == len(vols) else f"{plugged} branché(s)"))
+        self.stat["backups"][0].configure(text=f"{up} / {max(RECOMMENDED_BACKUPS, len(st['sets']))}")
 
     # ---------- état ----------
     def set_master(self, path, save=True):
@@ -683,27 +923,37 @@ class App(tk.Tk):
         self._update_buttons()
         self._update_steps()
 
-    def _set_step(self, n, kind, text):
-        glyph, color = {"done": ("✔", COLOR_DONE), "warn": ("●", COLOR_WARN),
-                        "todo": ("○", COLOR_TODO), "off": ("—", COLOR_TODO)}[kind]
+    def _set_step(self, n, kind, text, short=""):
         s = self.steps[n]
-        s["glyph"].configure(text=glyph, foreground=color)
+        s["kind"] = kind
+        s["glyph"].configure(text=theme.kind_glyph(kind))
+        s["short"].configure(text=short)
+        s["pill"].configure(text=theme.KINDS[kind][4], style=f"Pill{kind}.TLabel")
         s["status"].configure(text=text)
+        self._paint_row(n)
+
+    def _insert(self, tree, values):
+        tree.insert("", "end", values=values, tags=("odd",) if len(tree.get_children()) % 2 else ())
 
     def _update_steps(self):
         st = self.st
         for t in (self.tree_vol, self.tree_src, self.tree_set):
             t.delete(*t.get_children())
+        self._set_stats(st)
         if not st:
             self._set_step(1, "warn", "Aucune archive ouverte. Branchez un disque neuf puis cliquez sur « Créer "
-                                      "l'archive… » (ou « Ouvrir… » si elle existe déjà).")
-            for n in (2, 3, 4, 5):
-                self._set_step(n, "todo", "Disponible une fois l'archive créée (étape 1).")
-            self.lbl_next.configure(text="➜ À faire maintenant : étape 1, créer ou ouvrir l'archive.")
+                                      "l'archive… » (ou « Ouvrir… » si elle existe déjà).", "Aucune archive ouverte")
+            for n in (2, 3, 4, 5, 6):
+                self._set_step(n, "todo", "Disponible une fois l'archive créée (étape 1).", "Après l'étape 1")
+            self._set_hero("next", "POUR COMMENCER", "Créer votre archive",
+                           "Branchez un disque NEUF (vide) puis cliquez sur « Créer l'archive ». Il deviendra "
+                           "ARCHIVE-1. Si l'archive existe déjà, ouvrez-la depuis l'étape 1.",
+                           self.create_archive, "Créer l'archive…")
             self.title(APP_TITLE)
+            if self.selected_step is None:
+                self.select_step(1)
             return
         self.title(f"{APP_TITLE} — {self.master_path}")
-        last_change = st["last_change"] or ""
 
         # Étape 1 : disques de l'archive
         free_plugged = 0
@@ -719,9 +969,8 @@ class App(tk.Tk):
             where = f"✓ {v['path'][:2]}" if plugged else "✗ non branché"
             if v["number"] == 1:
                 where += " (principal)"
-            self.tree_vol.insert("", "end", values=(
-                v["name"], where, core.fmt_int(v["files"]), core.fmt_size(v["bytes"]),
-                core.fmt_size(v["free"]) if plugged else "?", ver))
+            self._insert(self.tree_vol, (v["name"], where, core.fmt_int(v["files"]), core.fmt_size(v["bytes"]),
+                                         core.fmt_size(v["free"]) if plugged else "?", ver))
         unplugged = [v["name"] for v in st["main_vols"] if not v["path"]]
         txt = (f"{len(st['main_vols'])} disque(s) — {core.fmt_int(st['stored_n'])} fichiers, "
                f"{core.fmt_size(st['stored_b'])} — place libre sur les disques branchés : {core.fmt_size(free_plugged)}")
@@ -730,7 +979,9 @@ class App(tk.Tk):
         low = free_plugged < LOW_SPACE
         if low:
             txt += "  ⚠ Peu de place : ajoutez un disque à l'archive avant le prochain import."
-        self._set_step(1, "warn" if low else "done", txt)
+        self._set_step(1, "warn" if low else "done", txt,
+                       "Peu de place libre" if low else f"{len(st['main_vols'])} disque(s), "
+                                                        f"{core.fmt_size(free_plugged)} libres")
 
         # Étape 2 : sources
         srcs = st["sources"]
@@ -746,31 +997,33 @@ class App(tk.Tk):
                 ctrl = "✔ Rangeable" if s["last_check_status"].startswith("ok") else "● Problèmes"
             else:
                 ctrl = "—"
-            self.tree_src.insert("", "end", values=(
-                s["label"], s["note"] or "", core.fmt_int(s["n"]), core.fmt_size(s["sz"]),
-                f"{core.fmt_int(s['nc'])} ({core.fmt_size(s['szc'])})", etat, ctrl))
+            self._insert(self.tree_src, (s["label"], s["note"] or "", core.fmt_int(s["n"]), core.fmt_size(s["sz"]),
+                                         f"{core.fmt_int(s['nc'])} ({core.fmt_size(s['szc'])})", etat, ctrl))
         if not srcs:
             self._set_step(2, "todo", "Aucun disque importé pour l'instant. Branchez un ancien disque puis "
-                                      "cliquez sur « Importer un disque… ».")
+                                      "cliquez sur « Importer un disque… ».", "Aucun disque importé")
         elif pending:
             self._set_step(2, "warn", f"{len(srcs)} disque(s) connu(s), dont {len(pending)} à importer ou à "
-                                      f"reprendre (rebranchez-le et relancez « Importer un disque… »).")
+                                      f"reprendre (rebranchez-le et relancez « Importer un disque… »).",
+                           f"{len(pending)} disque(s) à importer ou reprendre")
         else:
             self._set_step(2, "done", f"{len(srcs)} disque(s) importé(s). Branchez le suivant, ou passez à "
-                                      f"l'étape 3 quand TOUS les anciens disques sont faits.")
+                                      f"l'étape 3 quand TOUS les anciens disques sont faits.",
+                           f"{len(srcs)} disque(s) importé(s)")
 
         # Étape 3 : vérification, disque par disque
         to_verify = [v for v in st["main_vols"] if v["files"] and not (
             v["last_verify"] and v["last_verify_status"] == "ok" and v["last_verify"] >= (v["last_added"] or ""))]
         if not st["stored_n"]:
-            self._set_step(3, "todo", "Rien à vérifier pour l'instant.")
+            self._set_step(3, "todo", "Rien à vérifier pour l'instant.", "Rien à vérifier")
         elif not to_verify:
-            self._set_step(3, "done", "Tous les disques de l'archive ont été vérifiés : tout est intact.")
+            self._set_step(3, "done", "Tous les disques de l'archive ont été vérifiés : tout est intact.",
+                           "Tout est intact")
         else:
             names = ", ".join(v["name"] + ("" if v["path"] else " (non branché)") for v in to_verify)
             self._set_step(3, "warn" if any(v["last_verify"] for v in st["main_vols"]) else "todo",
                            f"À vérifier : {names}. Branchez ces disques puis « Vérifier maintenant » "
-                           f"(relit tout : compter plusieurs heures).")
+                           f"(relit tout : compter plusieurs heures).", f"{len(to_verify)} disque(s) à vérifier")
 
         # Étape 4 : jeux de sauvegarde
         n_ok = 0
@@ -781,73 +1034,105 @@ class App(tk.Tk):
             etat = "✔ À jour" if up else f"● {core.fmt_int(s['backlog_n'])} fichiers à copier ({core.fmt_size(s['backlog_b'])})"
             ver = short_date(s["last_verify"]) + (f" ({s['last_verify_status']})" if s["last_verify_status"] else "") \
                 if s["last_verify"] else "jamais"
-            self.tree_set.insert("", "end", values=(s["name"], disks, etat, short_date(s["last_sync"]) or "jamais", ver))
+            self._insert(self.tree_set, (s["name"], disks, etat, short_date(s["last_sync"]) or "jamais", ver))
         no_backup = st["meta"].get("backup_policy") == "aucune" and not st["sets"]
         self.btn_toggle_backups.configure(text="Réactiver les sauvegardes" if no_backup
                                           else "Je ne veux pas de sauvegarde…")
         if no_backup:
             self._set_step(4, "off", "Pas de sauvegarde : c'est votre choix. ⚠ L'archive est alors la SEULE copie : "
                                      "si un de ses disques tombe en panne, son contenu est perdu. Vous pouvez "
-                                     "changer d'avis à tout moment (« Créer un jeu de sauvegarde… »).")
+                                     "changer d'avis à tout moment (« Créer un jeu de sauvegarde… »).",
+                           "Désactivées (votre choix)")
         elif n_ok >= RECOMMENDED_BACKUPS:
-            self._set_step(4, "done", f"{n_ok} jeux de sauvegarde à jour. Rangez-en un hors de la maison.")
+            self._set_step(4, "done", f"{n_ok} jeux de sauvegarde à jour. Rangez-en un hors de la maison.",
+                           f"{n_ok} jeux à jour")
         elif st["sets"]:
             self._set_step(4, "warn", f"{n_ok} jeu(x) à jour sur {RECOMMENDED_BACKUPS} recommandés. Branchez les disques "
-                                      f"d'un jeu et cliquez « Mettre à jour les sauvegardes », ou créez un autre jeu.")
+                                      f"d'un jeu et cliquez « Mettre à jour les sauvegardes », ou créez un autre jeu.",
+                           f"{n_ok} à jour sur {RECOMMENDED_BACKUPS} conseillés")
         else:
             self._set_step(4, "todo", "Aucune sauvegarde. Branchez un disque neuf et cliquez « Créer un jeu de "
-                                      f"sauvegarde… » ({RECOMMENDED_BACKUPS} jeux conseillés).")
+                                      f"sauvegarde… » ({RECOMMENDED_BACKUPS} jeux conseillés).", "Aucune sauvegarde")
 
         # Étape 5 : contrôle des anciens disques
         checked = [s for s in srcs if s["last_check_status"] and s["last_check_status"].startswith("ok")
                    and s["last_check"] >= (s["last_seen"] or "")]
         if srcs and len(checked) == len(srcs):
             self._set_step(5, "done", f"Les {len(srcs)} anciens disques ont été contrôlés : leur contenu est "
-                                      f"dans l'archive.")
+                                      f"dans l'archive.", "Tous contrôlés")
         elif srcs:
             self._set_step(5, "warn" if checked else "todo",
                            f"{len(checked)}/{len(srcs)} anciens disques contrôlés. Ne vous séparez d'un ancien "
                            + ("disque qu'après contrôle. Sans sauvegarde, garder les anciens disques reste votre "
                               "seule copie de secours." if no_backup else
-                              "disque qu'après contrôle ET sauvegardes à jour."))
+                              "disque qu'après contrôle ET sauvegardes à jour."),
+                           f"{len(checked)} sur {len(srcs)} contrôlé(s)")
         else:
-            self._set_step(5, "todo", "Rien à contrôler pour l'instant.")
+            self._set_step(5, "todo", "Rien à contrôler pour l'instant.", "Rien à contrôler")
 
         # Étape 6 : classement
         cm = st["meta"].get("classification_model")
         if not st["stored_n"]:
-            self._set_step(6, "todo", "Disponible une fois des fichiers importés.")
+            self._set_step(6, "todo", "Disponible une fois des fichiers importés.", "Après les imports")
         elif not cm:
             self._set_step(6, "off", "Non classée : les fichiers sont rangés par ancien disque. Quand tous les disques "
                                      "sont importés, vous pouvez tout classer par type et par date (aperçu avant de "
-                                     "valider, annulable).")
+                                     "valider, annulable).", "Facultatif")
         elif st["unclassified"]:
             self._set_step(6, "warn", f"Classée selon le modèle {cm} ({classement.MODELS.get(cm, '')}) le "
                                       f"{short_date(st['meta'].get('classification_at'))}. "
                                       f"{core.fmt_int(st['unclassified'])} fichiers importés depuis sont à classer : "
-                                      f"relancez « Classer l'archive… ».")
+                                      f"relancez « Classer l'archive… ».", f"{core.fmt_int(st['unclassified'])} à classer")
         else:
             self._set_step(6, "done", f"Classée selon le modèle {cm} ({classement.MODELS.get(cm, '')}) le "
-                                      f"{short_date(st['meta'].get('classification_at'))}.")
+                                      f"{short_date(st['meta'].get('classification_at'))}.", f"Modèle {cm}")
 
-        # Prochaine étape conseillée
+        # Prochaine étape conseillée : une seule action, bien visible
+        sets_late = any(s["backlog_n"] for s in st["sets"])
         if low:
-            nxt = "étape 1, ajouter un disque à l'archive (il reste peu de place)."
+            n = 1
+            self._set_hero("warn", "ATTENTION", "Il reste peu de place sur l'archive",
+                           "Ajoutez un disque neuf à l'archive avant le prochain import : il deviendra "
+                           f"ARCHIVE-{len(st['main_vols']) + 1}.", self.add_main_disk, "Ajouter un disque…")
         elif not srcs or pending:
-            nxt = "étape 2, importer les anciens disques."
+            n = 2
+            self._set_hero("next", "PROCHAINE ÉTAPE", "Importer les anciens disques",
+                           (f"{len(pending)} disque(s) à reprendre : rebranchez-le et relancez l'import, il reprend "
+                            "là où il s'était arrêté." if pending and any(s["last_mode"] != "scan" for s in pending)
+                            else "Branchez un ancien disque, puis cliquez sur « Importer un disque ». Recommencez "
+                                 "pour chaque disque, un à la fois."),
+                           lambda: self.add_source(copy=True), "Importer un disque…")
         elif to_verify:
-            nxt = "étape 3, vérifier l'archive (si tous les anciens disques sont importés)."
+            n = 3
+            self._set_hero("next", "PROCHAINE ÉTAPE", "Vérifier l'archive",
+                           "Une fois TOUS les anciens disques importés : branchez les disques de l'archive et "
+                           "lancez la vérification. Elle relit tout et peut durer plusieurs heures.",
+                           self.verify_master, "Vérifier maintenant")
         elif n_ok < RECOMMENDED_BACKUPS and not no_backup:
-            nxt = "étape 4, créer / mettre à jour les jeux de sauvegarde (ou choisir « pas de sauvegarde »)."
+            n = 4
+            if sets_late:
+                self._set_hero("next", "PROCHAINE ÉTAPE", "Mettre à jour les sauvegardes",
+                               "Branchez les disques d'un jeu de sauvegarde : les fichiers ajoutés depuis la dernière "
+                               "fois y seront copiés et vérifiés.", self.update_backups, "Mettre à jour")
+            else:
+                self._set_hero("next", "PROCHAINE ÉTAPE", "Créer une sauvegarde",
+                               f"Une copie complète de l'archive sur un disque neuf. {RECOMMENDED_BACKUPS} jeux "
+                               "conseillés, dont un rangé hors de la maison.", self.create_set,
+                               "Créer un jeu de sauvegarde…")
         elif len(checked) < len(srcs):
-            nxt = "étape 5, contrôler les anciens disques."
+            n = 5
+            self._set_hero("next", "PROCHAINE ÉTAPE", "Contrôler les anciens disques",
+                           "Avant de ranger un ancien disque, rebranchez-le : le programme confirme que tout son "
+                           "contenu est bien dans l'archive.", self.check_source, "Contrôler un disque…")
         else:
-            nxt = None
-        self.lbl_next.configure(text=f"➜ À faire maintenant : {nxt}" if nxt else
-                                ("✔ Tout est en ordre (sans sauvegarde, par choix). Pensez à vérifier l'archive "
-                                 "une fois par an." if no_backup else
-                                 "✔ Tout est en ordre. Pensez à vérifier l'archive et les sauvegardes une fois par an.")
-                                + ("  Facultatif : étape 6, classer l'archive." if not nxt and not cm else ""))
+            n = 6 if not cm else 3
+            self._set_hero("ok", "TOUT EST EN ORDRE", "Votre archive est complète et protégée",
+                           ("Sans sauvegarde, par votre choix. " if no_backup else "") +
+                           "Pensez à vérifier l'archive" + ("" if no_backup else " et les sauvegardes") +
+                           " une fois par an." + ("  Facultatif : classer l'archive par type et par date "
+                                                  "(étape 6)." if not cm else ""))
+        if self.selected_step is None:
+            self.select_step(n)
 
     def _update_buttons(self):
         for b in self.action_buttons:
@@ -872,6 +1157,7 @@ class App(tk.Tk):
         self.usb2_warned = False
         core.CANCEL.clear()
         self._update_buttons()
+        self._set_activity("busy")
 
         def worker():
             results = []
@@ -950,27 +1236,32 @@ class App(tk.Tk):
         last_title = results[-1][0] if results else ""
         if worst == 0:
             self.progress["value"] = 1000
-            self.lbl_status.configure(text="Terminé ✔")
+            self._set_activity("ok")
+            self.lbl_status.configure(text="Terminé, tout s'est bien passé.")
             if on_all_done:
                 on_all_done(results)
         elif worst == 130:
-            self.lbl_status.configure(text="Arrêté.")
+            self._set_activity("idle")
+            self.lbl_status.configure(text="Arrêté. Rien n'est perdu : relancez plus tard pour reprendre.")
             messagebox.showinfo(APP_TITLE, "Opération arrêtée.\n\nRien n'est perdu : relancez la même "
                                 "action plus tard, elle reprendra là où elle s'était arrêtée.")
         elif worst == 1:
-            self.lbl_status.configure(text="Terminé avec des problèmes — voir le détail ci-dessous.")
+            self._set_activity("warn")
+            self.lbl_status.configure(text="Terminé avec des problèmes : voir le détail.")
             messagebox.showwarning(APP_TITLE, f"« {last_title} » s'est terminé, mais avec des problèmes.\n\n"
                                    "Le détail est affiché dans la zone « Activité ». Relancer l'opération "
                                    "règle souvent le souci ; sinon, le disque est peut-être abîmé.")
         elif worst == 3:
-            self.lbl_status.configure(text="Arrêté : plus de place.")
+            self._set_activity("warn")
+            self.lbl_status.configure(text="Arrêté : plus de place sur les disques de l'archive.")
             messagebox.showwarning(APP_TITLE, "Les disques de l'archive branchés sont PLEINS.\n\n"
                                    "• Branchez un disque de l'archive qui a encore de la place, ou\n"
                                    "• ajoutez un nouveau disque (étape 1 → « Ajouter un disque à l'archive… »).\n\n"
                                    "Puis relancez l'import : il reprendra là où il s'est arrêté.")
         else:
             err = next((e for _, rc, e in results if e), None)
-            self.lbl_status.configure(text="Erreur.")
+            self._set_activity("error")
+            self.lbl_status.configure(text="Erreur : voir le détail.")
             messagebox.showerror(APP_TITLE, (err or "Une erreur est survenue. Voir la zone « Activité ».")[:1500])
 
     def stop(self):
@@ -1332,6 +1623,7 @@ class App(tk.Tk):
         elif kind == "maj_error":
             self.busy = False
             self._update_buttons()
+            self._set_activity("error")
             self.lbl_status.configure(text="Mise à jour impossible.")
             messagebox.showerror(APP_TITLE, "La mise à jour a échoué. Le programme actuel reste "
                                  f"utilisable.\n\n{args[0]}")
@@ -1359,6 +1651,7 @@ class App(tk.Tk):
             return
         self.busy = True
         self._update_buttons()
+        self._set_activity("busy")
         self.lbl_status.configure(text=f"Téléchargement de la version {rel['version']}…")
         self.progress.configure(mode="determinate")
         self.progress["value"] = 0
@@ -1372,15 +1665,29 @@ class App(tk.Tk):
         threading.Thread(target=worker, daemon=True).start()
 
     def show_help(self):
+        P = theme.px
         w = tk.Toplevel(self)
         w.title("Mode d'emploi")
-        w.geometry("860x720")
-        t = tk.Text(w, wrap="word", font=("Segoe UI", 10), padx=16, pady=12)
-        sb = ttk.Scrollbar(w, command=t.yview)
+        w.configure(background=theme.BG)
+        w.geometry(f"{P(860)}x{P(720)}")
+        card = ttk.Frame(w, style="Card.TFrame", padding=P(6))
+        card.pack(fill="both", expand=True, padx=P(16), pady=P(16))
+        t = tk.Text(card, wrap="word", font="AFBody", padx=P(22), pady=P(16), relief="flat", borderwidth=0,
+                    highlightthickness=0, background=theme.CARD, foreground=theme.TEXT, spacing1=P(2), spacing3=P(2))
+        sb = ttk.Scrollbar(card, command=t.yview)
         t.configure(yscrollcommand=sb.set)
         sb.pack(side="right", fill="y")
         t.pack(fill="both", expand=True)
-        t.insert("1.0", HELP_TEXT)
+        t.tag_configure("h", font="AFSubtitle", foreground=theme.ACCENT, spacing1=P(14), spacing3=P(4))
+        t.tag_configure("step", font="AFStrong")
+        for line in HELP_TEXT.splitlines(keepends=True):
+            plain = line.strip()
+            if plain and plain == plain.upper() and any(c.isalpha() for c in plain):
+                t.insert("end", plain.capitalize() + "\n", "h")   # titres en capitales : plus doux à lire
+            elif re.match(r"^\d\. ", plain):
+                t.insert("end", line, "step")
+            else:
+                t.insert("end", line)
         t.configure(state="disabled")
 
 

@@ -2,6 +2,25 @@
 
 Les notes de chaque version publiée sur GitHub sont reprises de ce fichier.
 
+## [2.2.0] - 2026-10-29
+
+### Nouvelle interface
+- Design entièrement revu, plus moderne et plus rassurant : cartes aux coins arrondis, palette bleue
+  (actions) et verte (ce qui est fait), icônes Windows, textes plus lisibles (thème Sun Valley, style
+  Windows 11), adapté à toutes les mises à l'échelle d'écran.
+- Carte « Prochaine étape » en haut de la fenêtre : ce qu'il faut faire maintenant, avec un seul gros
+  bouton pour le faire.
+- Chiffres clés de l'archive : fichiers, taille totale, disques, sauvegardes à jour.
+- Liste des étapes à gauche (coche verte, triangle orange), détail de l'étape choisie à droite.
+- Pendant une opération, la carte « Activité » devient bleue, son icône pulse doucement et la barre de
+  progression avance en douceur ; le résultat s'affiche ensuite en vert, orange ou rouge. Le détail
+  s'ouvre tout seul en cas de problème.
+- Fenêtre d'aide et fenêtres de dialogue harmonisées.
+
+### Documentation
+- README réécrit pour le grand public, avec des captures d'écran et une foire aux questions.
+- Les détails techniques sont dans `docs/TECHNIQUE.md`.
+
 ## [2.1.0] - 2026-10-29
 
 ### Installation et mises à jour
