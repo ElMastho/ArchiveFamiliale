@@ -2,6 +2,18 @@
 
 Les notes de chaque version publiée sur GitHub sont reprises de ce fichier.
 
+## [2.5.2] - 2026-10-29
+
+### Mise en pause plus claire et plus rapide
+- Pendant une mise en pause, la fenêtre est grisée et un message « Mise en pause en cours… » demande
+  de patienter ; la main est rendue dès que l'opération est vraiment arrêtée.
+- La pause est plus rapide : les copies de secours du catalogue et le calcul du contenu propre au
+  disque, longs sur une grosse archive, sont faits à la reprise plutôt qu'à l'arrêt.
+
+### Corrigé
+- Après « Oui » aux notifications au démarrage de l'import, l'import attendait la fermeture de la
+  fenêtre de réglage : il démarre maintenant tout de suite.
+
 ## [2.5.1] - 2026-10-29
 
 ### Notifications : seulement avec votre accord

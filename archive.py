@@ -44,7 +44,7 @@ import uuid
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 
-VERSION = "2.5.1"
+VERSION = "2.5.2"
 
 ARCHIVE_FOLDER = "ArchiveFamiliale"          # nom de dossier conseillé sur chaque disque
 CATALOG_DIR = "_catalogue"
@@ -1876,12 +1876,14 @@ def _ingest(ar: Archive, args, copy: bool) -> int:
     if completed:   # import complet sans erreur : il vaut contrôle rapide, inutile de rebrancher le disque
         ar.db.execute("UPDATE sources SET last_check=?, last_check_status='ok' WHERE label=?", (now, label))
     ar.db.commit()
-    if copy:
+    # Mise en pause : on rend la main tout de suite. Les copies de secours du catalogue (et du
+    # programme) et le calcul du contenu propre à ce disque, longs, seront faits à la reprise.
+    if copy and not interrupted:
         ar.rotate_snapshots()
         ar.sync_catalog_copies()
 
     # 3. Bilan
-    excl_n, excl_b = ar.exclusive_content(label)
+    excl_n, excl_b = ar.exclusive_content(label) if not interrupted else (None, None)
     print()
     print(f"Bilan pour « {label} » ({fmt_duration(elapsed)}) :")
     print(f"  fichiers traités              : {fmt_int(st.files)} / {fmt_int(len(entries))}  ({fmt_size(st.bytes)})")
@@ -1894,7 +1896,8 @@ def _ingest(ar: Archive, args, copy: bool) -> int:
         print(f"  déjà traités (reprise)        : {fmt_int(st.already)}")
     else:
         print(f"  empreintes calculées / reprises : {fmt_int(st.scanned)}")
-    print(f"  contenu présent UNIQUEMENT ici : {fmt_int(excl_n)} fichiers ({fmt_size(excl_b)})")
+    if excl_n is not None:
+        print(f"  contenu présent UNIQUEMENT ici : {fmt_int(excl_n)} fichiers ({fmt_size(excl_b)})")
     print(f"  erreurs de lecture            : {fmt_int(st.errors)}")
     print(f"  éléments ignorés              : {fmt_int(st.skipped)}")
     for s in st.error_samples:

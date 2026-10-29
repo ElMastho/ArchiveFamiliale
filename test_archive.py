@@ -829,6 +829,41 @@ class GuiTest(Base):
         self.assertEqual(app.steps[7]["kind"], "done")
         self.assertIn("doublons", app.steps[7]["status"].cget("text"))
 
+    def test_yes_to_notifications_starts_at_once(self):
+        """« Oui » aux notifications : la fenêtre de réglage s'ouvre, mais l'import démarre sans l'attendre."""
+        from unittest import mock
+        import archive_gui
+        app = self.open_app()
+        app.plan_disks([{"path": self.src1, "label": "Disque1", "note": "", "serial": None, "size": 1}])
+        with mock.patch.object(archive_gui, "messagebox") as mb,                 mock.patch.object(archive_gui, "NotifyDialog") as dlg:
+            mb.askyesnocancel.return_value = True
+            app.start_import()
+            self.assertTrue(app.busy)
+            dlg.assert_called_once()
+            self.assertTrue(app.notifier.enabled)
+            app.notifier.cfg["ntfy_accord"] = False   # le test n'envoie rien
+            end = time.monotonic() + 30
+            while app.iq is not None or app.busy:
+                self.assertLess(time.monotonic(), end)
+                app.update()
+
+    def test_pause_overlay(self):
+        """Mise en pause : la fenêtre est grisée jusqu'à l'arrêt effectif, puis la main est rendue."""
+        from unittest import mock
+        import archive_gui
+        app = self.open_app()
+        app.busy = True
+        with mock.patch.object(archive_gui, "messagebox") as mb:
+            mb.askyesno.return_value = True
+            app.stop()
+        self.assertTrue(archive.CANCEL.is_set())
+        archive.CANCEL.clear()
+        self.assertIsNotNone(app.pause_overlay)
+        self.assertTrue(app.pause_overlay.card.winfo_exists())
+        app._job_done([("x", 130, None)], None, lambda results: None)
+        self.assertIsNone(app.pause_overlay)
+        self.assertFalse(app.busy)
+
     def test_archive_disks_not_importable(self):
         """Dans le choix des disques à importer, les disques de l'archive sont grisés."""
         from unittest import mock

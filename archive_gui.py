@@ -832,6 +832,64 @@ class NotifyDialog(tk.Toplevel):
         NotifyDialog(self.app)
 
 
+class PauseOverlay:
+    """Pendant une mise en pause : la fenêtre est grisée et un message demande de patienter, le temps
+    que le fichier en cours soit terminé proprement. La main est rendue quand l'opération s'est
+    vraiment arrêtée (App._job_done)."""
+
+    def __init__(self, app: "App", closing=False):
+        self.app = app
+        P = theme.px
+        self.shade = tk.Toplevel(app)
+        self.shade.overrideredirect(True)
+        self.shade.configure(background="#18212F")
+        try:
+            self.shade.attributes("-alpha", 0.35)
+        except tk.TclError:
+            pass
+        self.card = tk.Toplevel(app)
+        self.card.overrideredirect(True)
+        self.card.configure(background=theme.BORDER)
+        box = ttk.Frame(self.card, style="Card.TFrame", padding=(P(28), P(22)))
+        box.pack(fill="both", expand=True, padx=1, pady=1)
+        ttk.Label(box, text="Mise en pause en cours…" if not closing else "Mise en pause, puis fermeture…",
+                  style="CardTitle.TLabel").pack(anchor="w")
+        ttk.Label(box, text="Le programme termine proprement le fichier en cours et note où il en est. Cela "
+                            "peut prendre jusqu'à une minute sur un gros fichier.\n\nPatientez, et ne débranchez "
+                            "aucun disque pour l'instant.", style="CardMuted.TLabel", wraplength=P(420),
+                  justify="left").pack(anchor="w", pady=(P(8), P(14)))
+        self.bar = ttk.Progressbar(box, mode="indeterminate", length=P(420))
+        self.bar.pack(fill="x")
+        self.bar.start(12)
+        top = app.attributes("-topmost")
+        for w in (self.shade, self.card):
+            w.protocol("WM_DELETE_WINDOW", lambda: None)
+            w.attributes("-topmost", top)   # au-dessus de la fenêtre principale, même si elle l'est
+        self._follow()
+        self.card.grab_set()
+        self._bind = app.bind("<Configure>", lambda e: self._follow(), add="+")
+
+    def _follow(self):
+        app = self.app
+        app.update_idletasks()
+        x, y, w, h = app.winfo_rootx(), app.winfo_rooty(), app.winfo_width(), app.winfo_height()
+        self.shade.lift()   # avant de placer : sous Windows, lift() remet une fenêtre sans bordure en 0,0
+        self.card.lift()
+        self.shade.geometry(f"{w}x{h}+{x}+{y}")
+        self.card.update_idletasks()
+        cw, ch = self.card.winfo_reqwidth(), self.card.winfo_reqheight()
+        self.card.geometry(f"{cw}x{ch}+{x + (w - cw) // 2}+{y + (h - ch) // 2}")
+
+    def close(self):
+        try:
+            self.app.unbind("<Configure>", self._bind)
+            self.card.grab_release()
+            self.shade.destroy()
+            self.card.destroy()
+        except tk.TclError:
+            pass
+
+
 class ChoiceDialog(tk.Toplevel):
     def __init__(self, app, title, text, options):
         super().__init__(app)
@@ -947,6 +1005,7 @@ class App(tk.Tk):
         self.notifier = notif.Notifier(self.cfg)
         self.job_t0 = 0.0
         self.job_title = ""
+        self.pause_overlay = None
         self.notified_at = 0.0   # dernier point d'avancement envoyé sur le téléphone
         self.q: queue.Queue = queue.Queue()
         self.action_buttons: list[ttk.Button] = []
@@ -1814,7 +1873,15 @@ class App(tk.Tk):
             pass
         self.after(100, self._poll)
 
+    def _show_pause_overlay(self, closing=False):
+        if self.busy and not self.pause_overlay:
+            self.btn_stop.configure(state="disabled")
+            self.pause_overlay = PauseOverlay(self, closing)
+
     def _job_done(self, results, on_all_done, on_finish=None):
+        if self.pause_overlay:   # l'opération est vraiment arrêtée : on rend la main
+            self.pause_overlay.close()
+            self.pause_overlay = None
         self.busy = False
         self.progress.stop()
         self.progress.configure(mode="determinate")
@@ -1874,6 +1941,7 @@ class App(tk.Tk):
         if self.busy and messagebox.askyesno(APP_TITLE, text):
             core.CANCEL.set()
             self.lbl_status.configure(text="Mise en pause…")
+            self._show_pause_overlay()
 
     def _on_close(self):
         if not self.busy:
@@ -1885,6 +1953,7 @@ class App(tk.Tk):
         if messagebox.askyesno(APP_TITLE, text):
             self.closing = True
             core.CANCEL.set()
+            self._show_pause_overlay(closing=True)
 
     # ---------- actions : disques de l'archive ----------
     def _m(self):
@@ -2173,9 +2242,9 @@ class App(tk.Tk):
         self.cfg["ntfy_propose"] = True
         if answer:
             self.cfg.update(ntfy_accord=True, ntfy_avancement=True)
+            self.cfg.setdefault("ntfy_sujet", notif.new_topic())
             save_config(self.cfg)
-            dlg = NotifyDialog(self)
-            self.wait_window(dlg)
+            NotifyDialog(self)   # l'import démarre tout de suite ; on règle le téléphone pendant ce temps
         else:
             save_config(self.cfg)
         return True
