@@ -214,6 +214,16 @@ fichiers : 5,3 ms puis 2,3 ms par fichier. Le catalogue pèse environ 300 octets
 
 - `archive_gui.py` appelle les commandes du moteur dans un fil de travail (`run_jobs`) ; la sortie
   texte alimente la zone « Activité » et la barre de progression (`Progress.hook`).
+- **File d'import** (`start_queue`) : les disques cochés dans `SourcesDialog` sont importés un par un,
+  chacun par une commande `importer` distincte. Codes de retour : 0 ✅, 1 ⚠️ (fichiers illisibles),
+  2/99 ❌ (disque suivant) ; 3 (archive pleine) et 130 (arrêt) mettent la file en **pause** sur le
+  disque en cours. « Reprendre l'import », ou l'ajout d'un disque à l'archive pendant une pause
+  « plein », relance ce disque (le moteur saute ce qui est déjà fait) puis les suivants. Chaque disque
+  est retrouvé par son numéro de série de volume avant son tour, au cas où sa lettre aurait changé. La
+  file est enregistrée dans `config.json` (clé `file_import`) à chaque changement : après une
+  fermeture ou un redémarrage, elle est rechargée en pause et « Reprendre l'import » la relance.
+- Le temps restant pour l'ensemble de la file est extrapolé de la vitesse moyenne observée et de
+  l'espace occupé sur chaque disque (approximatif : les doublons vont plus vite).
 - `theme.py` s'appuie sur [Sun Valley](https://github.com/rdbende/Sun-Valley-ttk-theme) (`sv-ttk`,
   style Windows 11) quand il est installé, sinon sur le thème `clam`. Les cartes, pastilles et lignes
   sélectionnées sont des images arrondies anticrénelées générées au démarrage, à la taille de l'écran
@@ -228,7 +238,8 @@ fichiers : 5,3 ms puis 2,3 ms par fichier. Le catalogue pèse environ 300 octets
 `maj.py` interroge `https://api.github.com/repos/ElMastho/ArchiveFamiliale/releases/latest` au
 démarrage (désactivable : `"verifier_maj": false` dans `config.json`).
 
-1. Si la version publiée est plus récente que `VERSION`, un bouton propose l'installation.
+1. Si la version publiée est plus récente que `VERSION`, le programme propose aussitôt de
+   l'installer ; en cas de refus, un bouton « Installer la version … » reste dans l'en-tête.
 2. Le programme télécharge `ArchiveFamiliale-Setup.exe` (programme installé, reconnu à la présence de
    `unins000.exe`) ou `ArchiveFamiliale.zip` (version portable), et vérifie son empreinte SHA-256
    publiée à côté (`*.sha256`). Les chemins du zip sont contrôlés avant extraction.

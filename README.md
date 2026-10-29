@@ -41,9 +41,10 @@ Le programme s'ouvre depuis le menu Démarrer : **Archive Familiale**.
 
 > 💡 Installez le programme **sur l'ordinateur**, pas sur les disques de l'archive.
 
-**Mises à jour** : quand une nouvelle version existe, un bouton **« Installer la version … »**
-apparaît en haut de la fenêtre. Un clic suffit : le programme se ferme, se met à jour et se rouvre.
-Vos fichiers et vos réglages ne sont pas touchés.
+**Mises à jour** : à chaque démarrage, le programme regarde s'il existe une nouvelle version et
+propose de l'installer. Un clic suffit : il se ferme, se met à jour et se rouvre. Vos fichiers et vos
+réglages ne sont pas touchés. (Si vous refusez, le bouton **« Installer la version … »** reste en
+haut de la fenêtre.)
 
 ---
 
@@ -68,11 +69,18 @@ et à mesure.
 | | Étape | Ce que vous faites |
 |---|---|---|
 | 1️⃣ | **Créer l'archive** | Branchez un disque **neuf** et cliquez sur « Créer l'archive ». Il devient `ARCHIVE-1`. S'il n'y a plus de place un jour, ajoutez un deuxième disque : `ARCHIVE-2`. |
-| 2️⃣ | **Importer les anciens disques** | Branchez **un** ancien disque, cliquez sur « Importer un disque » et donnez-lui un nom (par exemple `Disque-noir-du-bureau`). Recommencez pour chaque disque. |
+| 2️⃣ | **Importer les anciens disques** | Branchez un ou **plusieurs** anciens disques, cliquez sur « Importer des disques », cochez-les et vérifiez leur nom (par exemple `Disque-noir-du-bureau`). Ils sont importés **l'un après l'autre**, même si vous partez : vous retrouvez un bilan disque par disque. |
 | 3️⃣ | **Vérifier l'archive** | Quand tout est importé, cliquez sur « Vérifier maintenant ». Le programme relit tout et confirme que rien n'est abîmé. |
 | 4️⃣ | **Faire des sauvegardes** | Branchez un autre disque neuf et cliquez sur « Créer un jeu de sauvegarde ». Faites-en **deux**, et rangez-en un **hors de la maison** (chez un proche, au travail…). |
 | 5️⃣ | **Contrôler les anciens disques** | Avant de ranger ou de donner un ancien disque, rebranchez-le et cliquez sur « Contrôler un ancien disque ». Si la réponse est **OUI**, tout son contenu est dans l'archive. |
 | ✨ | *Classer (facultatif)* | Rangez tout par type et par date : `Photos et vidéos / 2009 / 2009-08 Vacances Bretagne`. Vous voyez un aperçu avant de valider, et vous pouvez annuler. |
+
+### Importer plusieurs disques d'un coup
+
+Branchez tous vos anciens disques, cochez-les et lancez : ils passent l'un après l'autre pendant que
+vous êtes au travail ou que vous dormez. Le programme vous dit à l'avance si l'archive a assez de place.
+
+![Choisir plusieurs disques à importer à la suite](docs/images/plusieurs-disques.png)
 
 > ⚠️ **Ne jetez et n'effacez aucun ancien disque** avant que l'étape 5 ait dit OUI pour ce disque
 > **et** que vos sauvegardes soient à jour.
@@ -80,7 +88,9 @@ et à mesure.
 ### Pendant une opération
 
 Une carte bleue en bas de la fenêtre montre ce qui se passe : la progression, la vitesse et le temps
-restant. Vous pouvez cliquer sur **Arrêter** à tout moment : rien n'est perdu.
+restant. Vous pouvez cliquer sur **Mettre en pause** à tout moment : rien n'est perdu. Vous pouvez alors
+fermer le programme, et même éteindre ou déplacer l'ordinateur : au prochain lancement, un bouton
+**« Reprendre l'import »** repart exactement là où vous en étiez.
 
 ![Un import en cours, avec la progression et le temps restant](docs/images/import-en-cours.png)
 
@@ -94,7 +104,7 @@ restant. Vous pouvez cliquer sur **Arrêter** à tout moment : rien n'est perdu.
 - 🔌 **Branchez les disques sur un port USB 3** (souvent bleu, ou marqué « SS »). En USB 2, tout est
   trois fois plus lent ; le programme vous prévient s'il détecte un disque lent.
 - 🔋 **Ordinateur portable : laissez-le sur secteur.** Le programme l'empêche de se mettre en veille.
-- ✋ **Ne débranchez jamais un disque pendant une opération.** Cliquez d'abord sur « Arrêter ».
+- ✋ **Ne débranchez jamais un disque pendant une opération.** Cliquez d'abord sur « Mettre en pause ».
 - 🩺 **Un disque qui cliquette ou qui est très lent** est peut-être en train de lâcher : importez-le
   en priorité.
 - 📅 **Une fois par an**, branchez tout et lancez les vérifications de l'archive et des sauvegardes.
@@ -109,6 +119,18 @@ restant. Vous pouvez cliquer sur **Arrêter** à tout moment : rien n'est perdu.
 Comptez environ **2 à 3 heures par téraoctet** (1 To = 1 000 Go) avec un disque branché en USB 3.
 Au début de chaque import, le programme mesure la vitesse de vos disques et annonce une durée
 estimée. Vous pouvez arrêter et reprendre plus tard autant de fois que vous voulez.
+</details>
+
+<details>
+<summary><b>Puis-je lancer plusieurs disques et partir ?</b></summary>
+
+Oui. Branchez-les tous (un hub USB alimenté aide quand on manque de ports), cochez-les dans
+« Importer des disques » et lancez. Ils passent l'un après l'autre et l'ordinateur ne se met pas en
+veille. Un disque illisible n'arrête pas les suivants. À votre retour, un bilan indique pour chaque
+disque ✅ (tout est importé), ⚠️ (quelques fichiers illisibles) ou ❌ (disque non traité).
+
+Avant de lancer, le programme compare la taille des disques à la place libre de l'archive et vous
+prévient si ça risque de ne pas tenir (les doublons font souvent gagner beaucoup de place).
 </details>
 
 <details>
@@ -135,8 +157,13 @@ où chaque fichier a été trouvé.
 <details>
 <summary><b>Le disque de l'archive est plein, que faire ?</b></summary>
 
-Branchez un nouveau disque neuf et cliquez sur « Ajouter un disque à l'archive » (étape 1). Relancez
-l'import : il continue sur le nouveau disque.
+Pendant un import, le programme se met en **pause** et vous prévient. Branchez un disque neuf et
+cliquez sur « Ajouter un disque… » : l'import reprend tout seul sur le nouveau disque, là où il s'était
+arrêté, puis continue avec les disques suivants.
+
+Si vous importez beaucoup de disques en votre absence, ajoutez ce disque **avant de partir** (étape 1,
+« Ajouter un disque à l'archive ») : le programme passera dessus automatiquement quand le premier sera
+plein, sans jamais s'arrêter.
 </details>
 
 <details>

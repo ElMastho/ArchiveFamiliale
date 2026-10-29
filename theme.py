@@ -192,6 +192,8 @@ def apply(root: tk.Tk):
     s.configure("TLabel", background=BG, foreground=TEXT)
     s.configure("Muted.TLabel", background=BG, foreground=MUTED)
     s.configure("Title.TLabel", background=BG, foreground=TEXT, font="AFTitle")
+    s.configure("Strong.TLabel", background=BG, foreground=TEXT, font="AFStrong")
+    s.configure("Warn.TLabel", background=BG, foreground=WARN)
     s.configure("TButton", font="AFBody", padding=(px(12), px(4), px(12), px(5)))
     s.configure("Accent.TButton", font="AFStrong", padding=(px(14), px(5), px(14), px(6)))
     s.configure("Big.Accent.TButton", font="AFStrong", padding=(px(20), px(8), px(20), px(9)))

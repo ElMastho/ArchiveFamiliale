@@ -22,6 +22,7 @@ import sqlite3
 import string
 import sys
 import threading
+import time
 import traceback
 import unicodedata
 import webbrowser
@@ -63,16 +64,21 @@ voir son détail et ses boutons.
    Le plus simple : laisser tous les disques de l'archive branchés pendant les imports
    (un hub USB alimenté aide beaucoup).
 
-2. Importer les anciens disques — un par un
-   • Branchez UN ancien disque.
-   • Cliquez sur « Importer un disque… », choisissez-le dans la liste, donnez-lui une
-     description (ex. : « disque noir du bureau »), puis « OK ».
-   • Attendez la fin (cela peut durer plusieurs heures pour un gros disque).
-     Vous pouvez cliquer sur « Arrêter » : la prochaine fois, ça reprendra où ça en était.
-   • Si le programme dit que les disques de l'archive sont pleins : ajoutez un disque
-     (étape 1) puis relancez l'import, il reprendra où il en était.
-   • Éjectez le disque proprement (icône USB en bas à droite de Windows), débranchez-le,
-     puis passez au suivant.
+2. Importer les anciens disques — un ou plusieurs à la fois
+   • Branchez un ou plusieurs anciens disques (un hub USB alimenté aide beaucoup).
+   • Cliquez sur « Importer des disques… », cochez ceux à importer, vérifiez leur nom
+     (à écrire sur une étiquette) et ajoutez une description si vous voulez
+     (ex. : « disque noir du bureau »), puis « Importer ».
+   • Les disques sont importés l'un après l'autre : vous pouvez partir, l'ordinateur
+     travaille seul (il ne se met pas en veille). Comptez plusieurs heures par disque.
+     Un disque qui pose problème n'arrête pas les suivants ; à la fin, un bilan
+     indique pour chaque disque si tout s'est bien passé.
+   • Si l'archive se remplit : l'import se met en pause et attend. Branchez un disque
+     neuf et cliquez sur « Ajouter un disque… » : l'import reprend tout seul, là où il
+     s'était arrêté. Pour ne pas être bloqué, ajoutez ce disque dès le départ.
+   • « Mettre en pause » arrête proprement : vous pouvez même éteindre l'ordinateur.
+     Au prochain lancement, « Reprendre l'import » repart où ça en était.
+   • À la fin, éjectez les disques proprement (icône USB en bas à droite de Windows).
 
 3. Vérifier l'archive
    Quand tous les disques sont importés, branchez tous les disques ARCHIVE-… et cliquez
@@ -110,7 +116,7 @@ DISQUES INTERNES D'UN PC (TOUR)
 
 CONSEILS
 • Ordinateur portable : laissez-le branché sur secteur. Le programme empêche la mise en veille.
-• Ne débranchez jamais un disque pendant une opération (cliquez d'abord sur « Arrêter »).
+• Ne débranchez jamais un disque pendant une opération (cliquez d'abord sur « Mettre en pause »).
 • Un disque qui fait des bruits de cliquetis ou qui est très lent est peut-être en train de
   mourir : importez-le en priorité, sans l'allumer inutilement.
 • Une fois par an : branchez tout et lancez les vérifications (archive et sauvegardes).
@@ -443,6 +449,197 @@ class DriveDialog(tk.Toplevel):
         self.destroy()
 
 
+class SourcesDialog(tk.Toplevel):
+    """Choix d'un ou de PLUSIEURS anciens disques à importer (ou estimer) à la suite.
+    result : liste de {path, label, note, serial, size} dans l'ordre d'exécution."""
+
+    def __init__(self, app: "App", copy: bool, title: str, intro: str):
+        super().__init__(app)
+        self.app, self.copy, self.result = app, copy, None
+        st = app.st or {"sources": [], "volumes": [], "main_vols": []}
+        self.sources = st["sources"]
+        self.source_by_serial = {s["volume_serial"]: s for s in self.sources
+                                 if s["volume_serial"] and s["root"] and core.drive_root_of(s["root"]) == s["root"]}
+        self.volume_by_serial = {v["volume_serial"]: v for v in st["volumes"] if v["volume_serial"]}
+        self.archive_free = sum(v["free"] or 0 for v in st["main_vols"] if v["path"])
+        self.rows: dict[str, dict] = {}   # chemin -> {var, label, note, drive, size, widgets}
+        self.folders: list[str] = []
+
+        self.title(title)
+        self.transient(app)
+        self.resizable(True, True)
+        self.configure(background=theme.BG)
+        P = theme.px
+        frm = ttk.Frame(self, padding=P(20))
+        frm.pack(fill="both", expand=True)
+        ttk.Label(frm, text=intro, wraplength=P(820), justify="left").pack(anchor="w")
+
+        self.grid_frm = ttk.Frame(frm)
+        self.grid_frm.pack(fill="x", pady=(P(14), P(6)))
+
+        row = ttk.Frame(frm)
+        row.pack(fill="x")
+        ttk.Button(row, text="↻ Actualiser la liste", command=self._refresh).pack(side="left")
+        ttk.Button(row, text="Ajouter un dossier précis…", command=self._pick_folder).pack(side="left", padx=P(8))
+        ttk.Button(row, text="Tout cocher", command=lambda: self._check_all(True)).pack(side="left")
+        ttk.Button(row, text="Tout décocher", command=lambda: self._check_all(False)).pack(side="left", padx=P(8))
+
+        self.summary = ttk.Label(frm, text="", style="Strong.TLabel")
+        self.summary.pack(anchor="w", pady=(P(14), 0))
+        self.space = ttk.Label(frm, text="", style="Muted.TLabel", wraplength=P(820), justify="left")
+        self.space.pack(anchor="w", pady=(P(4), 0))
+
+        b = ttk.Frame(frm)
+        b.pack(fill="x", pady=(P(14), 0))
+        ttk.Button(b, text="Annuler", command=self.destroy).pack(side="right")
+        self.btn_ok = ttk.Button(b, text="Lancer", command=self._ok, style="Accent.TButton")
+        self.btn_ok.pack(side="right", padx=P(8))
+
+        self._refresh()
+        self.wait_visibility()
+        self.grab_set()
+        self.focus_set()
+
+    def _remark(self, d) -> tuple[str, bool]:
+        """(remarque, sélectionnable)"""
+        if core.read_marker(d.root):
+            return "Disque de l'archive : ne peut pas être importé", False
+        v = self.volume_by_serial.get(d.serial)
+        if v:
+            return (f"Contient aussi « {v['name']} » : ce dossier sera ignoré, seul le reste sera lu", True)
+        if d.serial in self.source_by_serial:
+            s = self.source_by_serial[d.serial]
+            return ("Déjà importé entièrement" if s["completed"] else "Déjà vu : l'import reprendra où il en était"), True
+        if d.root.upper().startswith(os.environ.get("SystemDrive", "C:").upper()):
+            return "Disque de cet ordinateur : seuls les fichiers des utilisateurs seront lus", True
+        if core.is_windows_root(d.root):
+            return "Contient Windows : seuls les fichiers des utilisateurs seront lus", True
+        return "", True
+
+    def _used_labels(self, but=None) -> set[str]:
+        used = {s["label"] for s in self.sources}
+        return used | {r["label"].get().strip() for p, r in self.rows.items() if p != but}
+
+    def _refresh(self):
+        old = {p: (r["var"].get(), r["label"].get(), r["note"].get()) for p, r in self.rows.items()}
+        for w in self.grid_frm.winfo_children():
+            w.destroy()
+        self.rows = {}
+        P = theme.px
+        g = self.grid_frm
+        g.columnconfigure(1, weight=1)
+        for c, text in ((1, "Disque"), (2, "Nom à lui donner (à écrire sur une étiquette)"), (3, "Description")):
+            ttk.Label(g, text=text, style="Muted.TLabel").grid(row=0, column=c, sticky="w", padx=(0, P(10)))
+        items = [(d.root, d) for d in core.list_drives()] + [(f, None) for f in self.folders]
+        for i, (path, d) in enumerate(items):
+            r = 1 + 2 * i
+            if d:
+                remark, ok = self._remark(d)
+                text = f"{d.root[:2]}  {d.name or '(sans nom)'}  ·  {core.fmt_size(d.used)} utilisés  ·  {d.kind}"
+                size = d.used
+                known = self.source_by_serial.get(d.serial)
+                base = d.name
+            else:
+                remark, ok = "Dossier choisi à la main", True
+                text, size, known, base = f"Dossier {path}", None, None, os.path.basename(path)
+            checked, lab, note = old.get(path, (path in self.folders, None, None))
+            row = {"var": tk.BooleanVar(value=checked and ok), "label": tk.StringVar(), "note": tk.StringVar(),
+                   "drive": d, "size": size}
+            self.rows[path] = row
+            if lab is None:
+                lab = known["label"] if known else suggest_label(base, self._used_labels(but=path))
+                note = (known["note"] or "") if known else ""
+            row["label"].set(lab)
+            row["note"].set(note or "")
+            cb = ttk.Checkbutton(g, variable=row["var"], command=self._update_summary,
+                                 state="normal" if ok else "disabled")
+            cb.grid(row=r, column=0, sticky="w", padx=(0, P(6)), pady=(P(6), 0))
+            ttk.Label(g, text=text, style="Strong.TLabel" if ok else "Muted.TLabel").grid(
+                row=r, column=1, sticky="w", padx=(0, P(10)), pady=(P(6), 0))
+            if ok:
+                ttk.Entry(g, textvariable=row["label"], width=28).grid(row=r, column=2, sticky="w",
+                                                                       padx=(0, P(10)), pady=(P(6), 0))
+                ttk.Entry(g, textvariable=row["note"], width=32).grid(row=r, column=3, sticky="we",
+                                                                      pady=(P(6), 0))
+            if remark:
+                ttk.Label(g, text=remark, style="Muted.TLabel").grid(row=r + 1, column=1, columnspan=3, sticky="w")
+        if not items:
+            ttk.Label(g, text="Aucun disque trouvé. Branchez-les puis cliquez sur « Actualiser la liste ».",
+                      style="Muted.TLabel").grid(row=1, column=1, sticky="w")
+        self._update_summary()
+
+    def _pick_folder(self):
+        folder = filedialog.askdirectory(parent=self, title="Choisir un dossier à importer")
+        if folder and os.path.normpath(folder) not in self.folders:
+            self.folders.append(os.path.normpath(folder))
+            self._refresh()
+
+    def _check_all(self, on):
+        for path, r in self.rows.items():
+            if not r["drive"] or self._remark(r["drive"])[1]:
+                r["var"].set(on)
+        self._update_summary()
+
+    def _chosen(self):
+        return [(p, r) for p, r in self.rows.items() if r["var"].get()]
+
+    def _update_summary(self):
+        chosen = self._chosen()
+        self.btn_ok.configure(state="normal" if chosen else "disabled",
+                              text=f"{'Importer' if self.copy else 'Estimer'} "
+                                   f"{len(chosen) if len(chosen) > 1 else 'ce'} disque{'s' if len(chosen) > 1 else ''}"
+                              if chosen else "Lancer")
+        if not chosen:
+            self.summary.configure(text="Cochez les disques à traiter.")
+            self.space.configure(text="", style="Muted.TLabel")
+            return
+        total = sum(r["size"] or 0 for _, r in chosen)
+        unknown = any(r["size"] is None for _, r in chosen)
+        self.summary.configure(text=f"{len(chosen)} disque(s) sélectionné(s), traités l'un après l'autre"
+                                    f" · environ {core.fmt_size(total)}{' + dossiers' if unknown else ''} à lire")
+        if not self.copy:
+            self.space.configure(text="Rien n'est copié : le programme calcule seulement ce qui serait nouveau.",
+                                 style="Muted.TLabel")
+        elif total > self.archive_free:
+            self.space.configure(
+                text=f"⚠ Place libre sur l'archive : {core.fmt_size(self.archive_free)}. Cela peut suffire grâce aux "
+                     "doublons, mais ce n'est pas certain. Si l'archive se remplit, l'import se met en pause et attend "
+                     "un nouveau disque. Pour ne pas être bloqué : ajoutez dès maintenant un disque à l'archive "
+                     "(étape 1).", style="Warn.TLabel")
+        else:
+            self.space.configure(text=f"Place libre sur l'archive : {core.fmt_size(self.archive_free)}, c'est "
+                                      "suffisant. Vous pouvez laisser l'ordinateur travailler seul.",
+                                 style="Muted.TLabel")
+
+    def _ok(self):
+        chosen = self._chosen()
+        if not chosen:
+            return
+        seen = {}
+        by_label = {s["label"]: s for s in self.sources}
+        for path, r in chosen:
+            label = r["label"].get().strip()
+            if not core.LABEL_RE.match(label):
+                messagebox.showerror(APP_TITLE, f"Nom invalide pour {path} : « {label} ».\n\nLe nom doit contenir "
+                                     "seulement des lettres sans accents, des chiffres, des tirets ou des espaces "
+                                     "(60 caractères maximum).\nExemple : Disque07-WD-bleu", parent=self)
+                return
+            if label.lower() in seen:
+                messagebox.showerror(APP_TITLE, f"Le nom « {label} » est donné à deux disques ({seen[label.lower()]} "
+                                     f"et {path}). Chaque disque doit avoir son propre nom.", parent=self)
+                return
+            seen[label.lower()] = path
+            d, known = r["drive"], by_label.get(label)
+            if known and d and known["volume_serial"] and d.serial and known["volume_serial"] != d.serial:
+                messagebox.showerror(APP_TITLE, f"Le nom « {label} » est déjà celui d'un autre disque. "
+                                     f"Choisissez un autre nom pour {path}.", parent=self)
+                return
+        self.result = [{"path": p, "label": r["label"].get().strip(), "note": r["note"].get().strip(),
+                        "serial": r["drive"].serial if r["drive"] else None, "size": r["size"]}
+                       for p, r in chosen]
+        self.destroy()
+
+
 class ChoiceDialog(tk.Toplevel):
     def __init__(self, app, title, text, options):
         super().__init__(app)
@@ -554,6 +751,7 @@ class App(tk.Tk):
         self.st = None
         self.busy = False
         self.closing = False
+        self.iq = None   # file d'import en cours ou en pause (plusieurs disques à la suite)
         self.q: queue.Queue = queue.Queue()
         self.action_buttons: list[ttk.Button] = []
         core.Progress.hook = lambda frac, text: self.q.put(("progress", frac, text))
@@ -563,6 +761,7 @@ class App(tk.Tk):
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         self.after(100, self._poll)
         self.set_master(find_master(self.cfg), save=False)
+        self._restore_queue()
         self._fit_to_screen()
         self.update_release = None
         if self.cfg.get("verifier_maj", True):
@@ -684,9 +883,10 @@ class App(tk.Tk):
                                         ("libre", "Libre", 100), ("verif", "Vérification", 200)], 3)
 
         s2 = self._step(2, "Importer les anciens disques",
-                        "Branchez un ancien disque à la fois. Son contenu nouveau est copié dans l'archive ; "
-                        "l'ancien disque n'est jamais modifié.",
-                        [("Importer un disque…", lambda: self.add_source(copy=True), True, False),
+                        "Branchez un ou plusieurs anciens disques : ils sont importés l'un après l'autre, sans "
+                        "que vous ayez besoin d'être là. Seul leur contenu nouveau est copié ; ils ne sont jamais "
+                        "modifiés.",
+                        [("Importer des disques…", lambda: self.add_source(copy=True), True, False),
                          ("Estimer sans copier…", lambda: self.add_source(copy=False), False, False)])
         self.tree_src = self._tree(s2, [("nom", "Nom", 160), ("desc", "Description", 190),
                                         ("fichiers", "Fichiers", 80), ("taille", "Taille", 85),
@@ -732,7 +932,7 @@ class App(tk.Tk):
         self.progress.grid(row=1, column=1, sticky="ew", pady=(P(6), 0))
         self.btn_log = ttk.Button(self.act, text="Afficher le détail", style="Toolbutton", command=self.toggle_log)
         self.btn_log.grid(row=0, column=2, rowspan=2, padx=(P(12), 0))
-        self.btn_stop = ttk.Button(self.act, text="Arrêter", command=self.stop, state="disabled")
+        self.btn_stop = ttk.Button(self.act, text="Mettre en pause", command=self.stop, state="disabled")
         self.btn_stop.grid(row=0, column=3, rowspan=2, padx=(P(8), 0))
         self.logf = ttk.Frame(self.act, style="CardFlat.TFrame", padding=0)
         self.txt = tk.Text(self.logf, height=8, wrap="word", font="AFMono", state="disabled", relief="flat",
@@ -1000,14 +1200,14 @@ class App(tk.Tk):
             self._insert(self.tree_src, (s["label"], s["note"] or "", core.fmt_int(s["n"]), core.fmt_size(s["sz"]),
                                          f"{core.fmt_int(s['nc'])} ({core.fmt_size(s['szc'])})", etat, ctrl))
         if not srcs:
-            self._set_step(2, "todo", "Aucun disque importé pour l'instant. Branchez un ancien disque puis "
-                                      "cliquez sur « Importer un disque… ».", "Aucun disque importé")
+            self._set_step(2, "todo", "Aucun disque importé pour l'instant. Branchez des anciens disques puis "
+                                      "cliquez sur « Importer des disques… ».", "Aucun disque importé")
         elif pending:
             self._set_step(2, "warn", f"{len(srcs)} disque(s) connu(s), dont {len(pending)} à importer ou à "
-                                      f"reprendre (rebranchez-le et relancez « Importer un disque… »).",
+                                      f"reprendre (rebranchez-le et relancez « Importer des disques… »).",
                            f"{len(pending)} disque(s) à importer ou reprendre")
         else:
-            self._set_step(2, "done", f"{len(srcs)} disque(s) importé(s). Branchez le suivant, ou passez à "
+            self._set_step(2, "done", f"{len(srcs)} disque(s) importé(s). Importez les suivants, ou passez à "
                                       f"l'étape 3 quand TOUS les anciens disques sont faits.",
                            f"{len(srcs)} disque(s) importé(s)")
 
@@ -1089,7 +1289,22 @@ class App(tk.Tk):
 
         # Prochaine étape conseillée : une seule action, bien visible
         sets_late = any(s["backlog_n"] for s in st["sets"])
-        if low:
+        iq = self.iq if self.iq and self.iq["paused"] and not self.busy else None
+        if iq:
+            n = 1 if iq["paused"] == "plein" and low else 2
+            names = ", ".join(it["label"] for it in iq["items"][:4]) + ("…" if len(iq["items"]) > 4 else "")
+            if iq["paused"] == "plein":
+                self._set_hero("warn", "IMPORT EN PAUSE", "L'archive est pleine",
+                               f"{len(iq['items'])} disque(s) attendent : {names}. Branchez un disque NEUF et "
+                               f"ajoutez-le : l'import reprendra tout seul là où il s'était arrêté.",
+                               *((self.add_main_disk, "Ajouter un disque…") if low else
+                                 (self.resume_queue, "Reprendre l'import")))
+            else:
+                self._set_hero("warn", "IMPORT EN PAUSE", f"{len(iq['items'])} disque(s) en attente",
+                               f"En attente : {names}. Rebranchez ces disques (peu importe le port ou la "
+                               "lettre) puis reprenez : l'import repartira là où il s'était arrêté.",
+                               self.resume_queue, "Reprendre l'import")
+        elif low:
             n = 1
             self._set_hero("warn", "ATTENTION", "Il reste peu de place sur l'archive",
                            "Ajoutez un disque neuf à l'archive avant le prochain import : il deviendra "
@@ -1099,9 +1314,9 @@ class App(tk.Tk):
             self._set_hero("next", "PROCHAINE ÉTAPE", "Importer les anciens disques",
                            (f"{len(pending)} disque(s) à reprendre : rebranchez-le et relancez l'import, il reprend "
                             "là où il s'était arrêté." if pending and any(s["last_mode"] != "scan" for s in pending)
-                            else "Branchez un ancien disque, puis cliquez sur « Importer un disque ». Recommencez "
-                                 "pour chaque disque, un à la fois."),
-                           lambda: self.add_source(copy=True), "Importer un disque…")
+                            else "Branchez vos anciens disques (plusieurs à la fois si vous voulez), cochez-les : "
+                                 "ils seront importés l'un après l'autre, même en votre absence."),
+                           lambda: self.add_source(copy=True), "Importer des disques…")
         elif to_verify:
             n = 3
             self._set_hero("next", "PROCHAINE ÉTAPE", "Vérifier l'archive",
@@ -1149,8 +1364,9 @@ class App(tk.Tk):
         self.txt.see("end")
         self.txt.configure(state="disabled")
 
-    def run_jobs(self, jobs, on_all_done=None):
-        """jobs : liste de (titre, argv). Exécutées l'une après l'autre dans un thread."""
+    def run_jobs(self, jobs, on_all_done=None, on_finish=None):
+        """jobs : liste de (titre, argv). Exécutées l'une après l'autre dans un thread.
+        on_finish(results), s'il est donné, remplace les messages de fin habituels (file d'import)."""
         if self.busy:
             return
         self.busy = True
@@ -1182,7 +1398,7 @@ class App(tk.Tk):
                     self.q.put(("log", f"\n{err}\n"))
                 if rc in (2, 3, 99, 130) or core.CANCEL.is_set():
                     break
-            self.q.put(("done", results, on_all_done))
+            self.q.put(("done", results, on_all_done, on_finish))
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -1209,7 +1425,7 @@ class App(tk.Tk):
                             self.progress.stop()
                             self.progress.configure(mode="determinate")
                         self.progress["value"] = frac * 1000
-                    self.lbl_status.configure(text=text)
+                    self.lbl_status.configure(text=self._queue_status(frac, text))
                 elif kind == "start":
                     self.log(f"\n━━━ {msg[1]} ━━━\n")
                     self.lbl_status.configure(text=msg[1] + "…")
@@ -1217,14 +1433,14 @@ class App(tk.Tk):
                     self.progress.configure(mode="determinate")
                     self.progress["value"] = 0
                 elif kind == "done":
-                    self._job_done(msg[1], msg[2])
+                    self._job_done(*msg[1:])
                 elif kind.startswith("maj_"):
                     self._on_update_msg(kind, msg[1:])
         except queue.Empty:
             pass
         self.after(100, self._poll)
 
-    def _job_done(self, results, on_all_done):
+    def _job_done(self, results, on_all_done, on_finish=None):
         self.busy = False
         self.progress.stop()
         self.progress.configure(mode="determinate")
@@ -1232,6 +1448,9 @@ class App(tk.Tk):
             self.destroy()
             return
         self.refresh()
+        if on_finish:
+            on_finish(results)
+            return
         worst = max((rc for _, rc, _ in results), default=0)
         last_title = results[-1][0] if results else ""
         if worst == 0:
@@ -1242,8 +1461,8 @@ class App(tk.Tk):
                 on_all_done(results)
         elif worst == 130:
             self._set_activity("idle")
-            self.lbl_status.configure(text="Arrêté. Rien n'est perdu : relancez plus tard pour reprendre.")
-            messagebox.showinfo(APP_TITLE, "Opération arrêtée.\n\nRien n'est perdu : relancez la même "
+            self.lbl_status.configure(text="En pause. Rien n'est perdu : relancez plus tard pour reprendre.")
+            messagebox.showinfo(APP_TITLE, "Opération mise en pause.\n\nRien n'est perdu : relancez la même "
                                 "action plus tard, elle reprendra là où elle s'était arrêtée.")
         elif worst == 1:
             self._set_activity("warn")
@@ -1265,17 +1484,24 @@ class App(tk.Tk):
             messagebox.showerror(APP_TITLE, (err or "Une erreur est survenue. Voir la zone « Activité ».")[:1500])
 
     def stop(self):
-        if self.busy and messagebox.askyesno(APP_TITLE, "Arrêter l'opération en cours ?\n\n"
-                                             "Vous pourrez la reprendre plus tard sans rien perdre."):
+        if self.iq:
+            text = ("Mettre l'import en pause ?\n\nVous pourrez ensuite fermer le programme, et même éteindre ou "
+                    "déplacer l'ordinateur. Au prochain lancement, cliquez sur « Reprendre l'import » : il "
+                    "repartira là où il s'était arrêté.")
+        else:
+            text = "Mettre l'opération en cours en pause ?\n\nVous pourrez la reprendre plus tard sans rien perdre."
+        if self.busy and messagebox.askyesno(APP_TITLE, text):
             core.CANCEL.set()
-            self.lbl_status.configure(text="Arrêt en cours…")
+            self.lbl_status.configure(text="Mise en pause…")
 
     def _on_close(self):
         if not self.busy:
             self.destroy()
             return
-        if messagebox.askyesno(APP_TITLE, "Une opération est en cours. L'arrêter et quitter ?\n\n"
-                               "Elle pourra être reprise plus tard."):
+        text = ("Un import est en cours. Le mettre en pause et quitter ?\n\nAu prochain lancement, « Reprendre "
+                "l'import » le fera repartir là où il s'était arrêté." if self.iq else
+                "Une opération est en cours. La mettre en pause et quitter ?\n\nElle pourra être reprise plus tard.")
+        if messagebox.askyesno(APP_TITLE, text):
             self.closing = True
             core.CANCEL.set()
 
@@ -1300,8 +1526,8 @@ class App(tk.Tk):
                       lambda _: (self.set_master(path),
                                  messagebox.showinfo(APP_TITLE, f"Archive créée dans {path}.\n\n"
                                                      "Collez une étiquette « ARCHIVE-1 » sur ce disque.\n\n"
-                                                     "Étape suivante : branchez un ancien disque et cliquez "
-                                                     "sur « Importer un disque… ».")))
+                                                     "Étape suivante : branchez des anciens disques et cliquez "
+                                                     "sur « Importer des disques… ».")))
 
     def open_archive(self):
         folder = filedialog.askdirectory(title="Choisir le dossier ArchiveFamiliale du disque ARCHIVE-1")
@@ -1331,40 +1557,176 @@ class App(tk.Tk):
             return
         path = dlg.result["path"]
         extra = ["--accepter-disque-source"] if dlg.result.get("accept_source") else []
-        self.run_jobs([("Ajout d'un disque à l'archive", ["ajouter-disque", path, *self._m(), *extra])],
-                      lambda _: messagebox.showinfo(APP_TITLE, f"Disque ajouté : il s'appelle « ARCHIVE-{n} ».\n\n"
-                                                    f"Collez-lui une étiquette « ARCHIVE-{n} »."))
+        def done(_):
+            if self.iq and self.iq["paused"] == "plein":   # l'import attendait ce disque : il repart seul
+                self.log(f"\nDisque « ARCHIVE-{n} » ajouté : l'import reprend.\n")
+                self.resume_queue()
+            else:
+                messagebox.showinfo(APP_TITLE, f"Disque ajouté : il s'appelle « ARCHIVE-{n} ».\n\n"
+                                    f"Collez-lui une étiquette « ARCHIVE-{n} ».")
+        self.run_jobs([("Ajout d'un disque à l'archive", ["ajouter-disque", path, *self._m(), *extra])], done)
 
     # ---------- actions : sources ----------
     def add_source(self, copy: bool):
-        intro = ("Branchez UN ancien disque, attendez qu'il apparaisse, puis sélectionnez-le "
-                 "(cliquez sur « Actualiser la liste » s'il n'apparaît pas).\n"
-                 "Le disque sera seulement LU : rien n'y est modifié ni effacé.")
+        intro = ("Branchez les anciens disques (autant que vous voulez), cochez-les, puis lancez : ils seront "
+                 "traités l'un après l'autre, sans que vous ayez besoin d'être là. Ils sont seulement LUS : "
+                 "rien n'y est modifié ni effacé.")
         if copy:
             unplugged = [v["name"] for v in self.st["main_vols"] if not v["path"]]
             if unplugged:
                 intro += (f"\n\nRemarque : {', '.join(unplugged)} n'est pas branché. Ce n'est pas grave tant que "
                           "les disques branchés ont de la place.")
         else:
-            intro += ("\n\nMode estimation : le programme calcule ce que contient le disque et ce qui serait "
+            intro += ("\n\nMode estimation : le programme calcule ce que contient chaque disque et ce qui serait "
                       "nouveau, sans rien copier. Utile pour savoir combien de disques prévoir.")
-        dlg = DriveDialog(self, "source" if copy else "scan",
-                          "Importer un disque" if copy else "Estimer un disque", intro)
+        dlg = SourcesDialog(self, copy, "Importer des disques" if copy else "Estimer des disques", intro)
         self.wait_window(dlg)
-        r = dlg.result
-        if not r:
+        if dlg.result:
+            self.start_queue(dlg.result, copy)
+
+    # ---------- file d'import : plusieurs disques à la suite ----------
+    def start_queue(self, items, copy):
+        """items : [{path, label, note, serial, size}], traités l'un après l'autre. Archive pleine ou arrêt :
+        la file se met en pause et reprend sur le disque en cours (Reprendre, ou ajout d'un disque)."""
+        q = self.iq
+        if q and q["paused"] and q["copy"] == copy:   # file en pause : les nouveaux disques passent après
+            known = {it["label"] for it in q["items"]}
+            new = [it for it in items if it["label"] not in known]
+            q["items"] += new
+            q["n"] += len(new)
+            return self._queue_next()
+        self.iq = {"items": list(items), "copy": copy, "n": len(items), "results": [], "paused": None,
+                   "done_bytes": 0, "active": 0.0, "t0": None, "current": None}
+        self._queue_next()
+
+    def _queue_next(self):
+        q = self.iq
+        if not q["items"]:
+            return self._queue_end()
+        item = q["items"][0]
+        # Les lettres de lecteur peuvent changer (disque rebranché pendant une pause) : on retrouve le
+        # disque par son numéro de série. Un mauvais disque serait de toute façon refusé par le moteur.
+        if item["serial"] and core.drive_root_of(item["path"]) == item["path"]:
+            for d in core.list_drives():
+                if d.serial == item["serial"]:
+                    item["path"] = d.root
+        argv = ["importer" if q["copy"] else "scanner", item["path"], *self._m(), "-l", item["label"]]
+        if item["note"]:
+            argv += ["--note", item["note"]]
+        pos = q["n"] - len(q["items"]) + 1
+        q["paused"], q["current"], q["t0"] = None, item, time.monotonic()
+        self._save_queue()
+        verb = "Import" if q["copy"] else "Estimation"
+        title = f"{verb} de « {item['label']} »" + (f" — disque {pos} sur {q['n']}" if q["n"] > 1 else "")
+        self.run_jobs([(title, argv)], on_finish=self._queue_step_done)
+
+    def _queue_status(self, frac, text):
+        """Texte de progression, précédé de la position dans la file et du temps restant pour l'ensemble."""
+        q = self.iq
+        if not q or not q["current"] or q["n"] < 2:
+            return text
+        pos = q["n"] - len(q["items"]) + 1
+        head = f"Disque {pos} sur {q['n']}"
+        sizes = [it["size"] for it in q["items"]]
+        if frac and None not in sizes:
+            done = q["done_bytes"] + frac * sizes[0]
+            elapsed = q["active"] + time.monotonic() - q["t0"]
+            if done > 0 and elapsed > 60:
+                left = (sum(sizes) - frac * sizes[0]) * elapsed / done
+                head += f" (ensemble : encore ≈ {core.fmt_duration(left)})"
+        return f"{head} · {text}"
+
+    def _queue_step_done(self, results):
+        q = self.iq
+        _, rc, err = results[-1] if results else ("", 99, "Rien n'a été exécuté.")
+        item = q["items"][0]
+        q["active"] += time.monotonic() - q["t0"]
+        q["current"] = None
+        if rc in (3, 130):   # archive pleine, ou arrêt demandé : en pause, rien n'est perdu
+            q["paused"] = "plein" if rc == 3 else "arrêt"
+            left = len(q["items"])
+            self.refresh()
+            self._set_activity("warn")
+            if rc == 3:
+                self.lbl_status.configure(text=f"En pause : l'archive est pleine. {left} disque(s) en attente.")
+                self.deiconify()
+                self.lift()
+                self.bell()
+                messagebox.showwarning(APP_TITLE, "L'archive est PLEINE : l'import est en pause.\n\n"
+                                       f"Disque en cours : « {item['label']} » ({left} disque(s) en attente).\n\n"
+                                       "Branchez un disque NEUF et cliquez sur « Ajouter un disque… » : l'import "
+                                       "reprendra tout seul, là où il s'est arrêté.\n\nSi vous branchez plutôt un "
+                                       "disque de l'archive qui a encore de la place, cliquez sur « Reprendre "
+                                       "l'import ».")
+            else:
+                self.lbl_status.configure(text=f"En pause. {left} disque(s) en attente : « Reprendre l'import » "
+                                               "pour continuer.")
             return
-        argv = ["importer" if copy else "scanner", r["path"], *self._m(), "-l", r["label"]]
-        if r["note"]:
-            argv += ["--note", r["note"]]
+        q["done_bytes"] += item["size"] or 0
+        q["items"].pop(0)
+        if rc == 0:
+            q["results"].append(("ok", item["label"], "entièrement importé" if q["copy"] else "estimé"))
+        elif rc == 1:
+            q["results"].append(("warn", item["label"], "importé, mais des fichiers n'ont pas pu être lus"))
+        else:
+            first = (err or "erreur inattendue").strip().splitlines()[0][:200]
+            q["results"].append(("error", item["label"], first))
+        self._save_queue()
+        self._queue_next()
 
-        def done(_):
-            msg = (f"Le disque « {r['label']} » a été entièrement importé.\n\n"
-                   "Vous pouvez l'éjecter (icône USB de Windows) et brancher le suivant.") if copy else \
-                  (f"Estimation de « {r['label']} » terminée. Voir « Rapport détaillé » pour le total.")
-            messagebox.showinfo(APP_TITLE, msg)
+    def _save_queue(self):
+        """La file est enregistrée dans config.json : elle survit à la fermeture du programme et à un
+        redémarrage de l'ordinateur."""
+        q = self.iq
+        if q and q["items"]:
+            self.cfg["file_import"] = {"master": self.master_path, "copy": q["copy"], "n": q["n"],
+                                       "items": q["items"], "results": q["results"]}
+        else:
+            self.cfg.pop("file_import", None)
+        save_config(self.cfg)
 
-        self.run_jobs([(f"{'Import' if copy else 'Estimation'} de « {r['label']} »", argv)], done)
+    def _restore_queue(self):
+        saved = self.cfg.get("file_import")
+        if not saved or not self.master_path or not core.same_path(saved["master"], self.master_path):
+            return
+        self.iq = {"items": saved["items"], "copy": saved["copy"], "n": saved["n"],
+                   "results": [tuple(r) for r in saved["results"]], "paused": "arrêt",
+                   "done_bytes": 0, "active": 0.0, "t0": None, "current": None}
+        self._update_buttons()
+        self._update_steps()
+        self._set_activity("warn")
+        self.lbl_status.configure(text=f"Import en pause : {len(self.iq['items'])} disque(s) en attente. "
+                                       "« Reprendre l'import » pour continuer.")
+
+    def resume_queue(self):
+        if self.iq and self.iq["paused"] and not self.busy:
+            self._queue_next()
+
+    def _queue_end(self):
+        q = self.iq
+        self.iq = None
+        self._save_queue()
+        self.refresh()
+        icons = {"ok": "✅", "warn": "⚠️", "error": "❌"}
+        lines = "\n".join(f"{icons[k]}  {label} : {text}" for k, label, text in q["results"])
+        self.log(f"\n━━━ Bilan ━━━\n{lines}\n")
+        bad = [k for k, _, _ in q["results"] if k != "ok"]
+        self.progress["value"] = 1000
+        self._set_activity("warn" if bad else "ok")
+        if bad:
+            self.lbl_status.configure(text=f"Terminé, avec des problèmes sur {len(bad)} disque(s) : voir le bilan.")
+            self.toggle_log(True)
+            messagebox.showwarning(APP_TITLE, f"Terminé, mais pas sans problèmes :\n\n{lines}\n\n"
+                                   "Pour un disque en ⚠️ ou ❌ : rebranchez-le et relancez l'import ; les fichiers "
+                                   "déjà traités sont sautés. Si le problème persiste, le disque est peut-être abîmé.")
+        elif q["copy"]:
+            self.lbl_status.configure(text=f"Terminé : {q['n']} disque(s) importé(s), tout s'est bien passé.")
+            messagebox.showinfo(APP_TITLE, f"Terminé, tout s'est bien passé :\n\n{lines}\n\n"
+                                "Vous pouvez éjecter ces disques (icône USB de Windows).")
+        else:
+            self.lbl_status.configure(text="Estimation terminée.")
+            messagebox.showinfo(APP_TITLE, f"Estimation terminée :\n\n{lines}\n\n"
+                                "Voir « Rapport détaillé » pour le total.")
 
     def verify_master(self):
         unplugged = [v["name"] for v in self.st["main_vols"] if not v["path"] and v["files"]]
@@ -1604,7 +1966,7 @@ class App(tk.Tk):
                 self.update_release = rel
                 self.btn_update.configure(text=f"⬆ Installer la version {rel['version']}")
                 self.btn_update.pack(side="right", padx=(0, 8))
-                if not silent:
+                if not self.busy:   # au démarrage aussi : on propose tout de suite de l'installer
                     self.install_update()
             elif not silent:
                 messagebox.showinfo(APP_TITLE, f"Vous avez la dernière version ({core.VERSION}).")
@@ -1634,7 +1996,7 @@ class App(tk.Tk):
             return
         if self.busy:
             messagebox.showinfo(APP_TITLE, "Une opération est en cours. Installez la mise à jour quand elle "
-                                "sera terminée (ou après l'avoir arrêtée).")
+                                "sera terminée (ou après l'avoir mise en pause).")
             return
         ok, why = maj.can_self_update()
         notes = rel["notes"].strip()

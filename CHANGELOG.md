@@ -2,6 +2,30 @@
 
 Les notes de chaque version publiée sur GitHub sont reprises de ce fichier.
 
+## [2.3.0] - 2026-10-29
+
+### Importer plusieurs disques d'un coup
+- Étape 2 : « Importer des disques… » permet de cocher plusieurs anciens disques (et des dossiers),
+  chacun avec son nom et sa description. Ils sont importés l'un après l'autre, sans surveillance.
+- Avant de lancer, le programme compare la taille à lire à la place libre sur l'archive et prévient
+  si ça risque de ne pas tenir.
+- Pendant l'import : position dans la file (« Disque 3 sur 7 ») et temps restant estimé pour
+  l'ensemble.
+- Un disque illisible ou débranché n'arrête pas les suivants. À la fin, un bilan indique pour chaque
+  disque ✅, ⚠️ ou ❌.
+- Archive pleine : la file se met en pause sur le disque en cours et prévient. Dès qu'un disque est
+  ajouté à l'archive, l'import reprend tout seul là où il s'était arrêté, puis continue. Un arrêt
+  manuel met aussi la file en pause (« Reprendre l'import »).
+- Si la lettre d'un disque change pendant une pause, il est retrouvé par son numéro de série.
+
+### Pause
+- Le bouton « Arrêter » devient « Mettre en pause ».
+- La file d'import est enregistrée : on peut fermer le programme, redémarrer ou déplacer l'ordinateur.
+  Au lancement suivant, « Reprendre l'import » repart exactement là où on en était.
+
+### Mises à jour
+- Au démarrage, si une nouvelle version existe, le programme propose directement de l'installer.
+
 ## [2.2.0] - 2026-10-29
 
 ### Nouvelle interface

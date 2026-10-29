@@ -8,6 +8,7 @@ import pathlib
 import shutil
 import sqlite3
 import tempfile
+import time
 import tkinter as tk
 import unittest
 import zipfile
@@ -608,11 +609,12 @@ class MultiDiskTest(Base):
 class GuiTest(Base):
     """L'interface s'ouvre, sans archive puis sur une archive, et réagit sans bloquer."""
 
-    def open_app(self):
+    def open_app(self, keep_config=False):
         import archive_gui
         os.environ["APPDATA"] = os.path.join(self.tmp, "appdata")
-        write(os.path.join(self.tmp, "appdata", "ArchiveFamiliale", "config.json"),
-              json.dumps({"master": self.master, "verifier_maj": False}).encode())
+        if not keep_config:
+            write(os.path.join(self.tmp, "appdata", "ArchiveFamiliale", "config.json"),
+                  json.dumps({"master": self.master, "verifier_maj": False}).encode())
         low = archive_gui.LOW_SPACE   # la place libre réelle de la machine ne doit pas changer l'étape conseillée
         archive_gui.LOW_SPACE = 0
         self.addCleanup(setattr, archive_gui, "LOW_SPACE", low)
@@ -620,9 +622,14 @@ class GuiTest(Base):
             app = archive_gui.App()
         except tk.TclError as e:   # pas d'écran (serveur sans bureau)
             self.skipTest(f"pas d'affichage : {e}")
-        self.addCleanup(app.destroy)
+        self.addCleanup(self.close_app, app)
         app.update_idletasks()
         return app
+
+    @staticmethod
+    def close_app(app):
+        with contextlib.suppress(tk.TclError):   # déjà fermée par le test
+            app.destroy()
 
     def setUp(self):
         super().setUp()
@@ -648,6 +655,80 @@ class GuiTest(Base):
         app._set_activity("ok")
         app.toggle_log(True)
         app.update_idletasks()
+
+    def run_queue(self, app, items, until):
+        """Lance une file d'import et fait tourner l'interface jusqu'à until(app) (30 s maximum)."""
+        app.start_queue([{"path": p, "label": lab, "note": "", "serial": None, "size": 1000} for p, lab in items],
+                        copy=True)
+        end = time.monotonic() + 30
+        while not until(app):
+            self.assertLess(time.monotonic(), end, "la file d'import ne se termine pas")
+            app.update()
+            time.sleep(0.02)
+
+    def test_import_queue(self):
+        """Plusieurs disques à la suite : un disque introuvable n'arrête pas les suivants."""
+        from unittest import mock
+        import archive_gui
+        app = self.open_app()
+        with mock.patch.object(archive_gui, "messagebox") as mb:
+            self.run_queue(app, [(self.src1, "Disque1"), (os.path.join(self.tmp, "absent"), "Absent"),
+                                 (self.src2, "Disque2")], lambda a: a.iq is None and not a.busy)
+        self.assertEqual(len(self.stored_paths()), 5)
+        msg = mb.showwarning.call_args[0][1]
+        self.assertIn("✅  Disque1", msg)
+        self.assertIn("❌  Absent", msg)
+        self.assertIn("✅  Disque2", msg)
+
+    def test_import_queue_pauses_when_full(self):
+        """Archive pleine : la file se met en pause sur le disque en cours, puis reprend."""
+        from unittest import mock
+        import archive_gui
+        app = self.open_app()
+        free = archive.volume_free
+        archive.volume_free = lambda p: 0
+        self.addCleanup(setattr, archive, "volume_free", free)
+        with mock.patch.object(archive_gui, "messagebox") as mb:
+            self.run_queue(app, [(self.src1, "Disque1"), (self.src2, "Disque2")],
+                           lambda a: a.iq and a.iq["paused"] and not a.busy)
+            self.assertEqual(app.iq["paused"], "plein")
+            self.assertEqual([it["label"] for it in app.iq["items"]], ["Disque1", "Disque2"])
+            self.assertEqual(app.hero_title.cget("text"), "L'archive est pleine")
+            mb.showwarning.assert_called_once()
+            archive.volume_free = free   # un disque a été ajouté : l'import reprend
+            app.resume_queue()
+            end = time.monotonic() + 30
+            while app.iq is not None or app.busy:
+                self.assertLess(time.monotonic(), end)
+                app.update()
+        self.assertEqual(len(self.stored_paths()), 5)
+        self.assertIn("Terminé, tout s'est bien passé", mb.showinfo.call_args[0][1])
+
+    def test_import_queue_survives_restart(self):
+        """Pause, fermeture du programme (ou redémarrage du PC) : au lancement suivant, la file reprend."""
+        from unittest import mock
+        import archive_gui
+        app = self.open_app()
+        free = archive.volume_free
+        archive.volume_free = lambda p: 0
+        self.addCleanup(setattr, archive, "volume_free", free)
+        with mock.patch.object(archive_gui, "messagebox") as mb:
+            self.run_queue(app, [(self.src1, "Disque1"), (self.src2, "Disque2")],
+                           lambda a: a.iq and a.iq["paused"] and not a.busy)
+            app.destroy()
+            archive.volume_free = free
+            app = self.open_app(keep_config=True)
+            self.assertEqual(app.iq["paused"], "arrêt")
+            self.assertEqual([it["label"] for it in app.iq["items"]], ["Disque1", "Disque2"])
+            self.assertEqual(app.hero_btn.cget("text"), "Reprendre l'import")
+            app.resume_queue()
+            end = time.monotonic() + 30
+            while app.iq is not None or app.busy:
+                self.assertLess(time.monotonic(), end)
+                app.update()
+        self.assertEqual(len(self.stored_paths()), 5)
+        self.assertIn("✅  Disque2", mb.showinfo.call_args[0][1])
+        self.assertNotIn("file_import", archive_gui.load_config())
 
     def test_open_without_archive(self):
         shutil.rmtree(self.master)
