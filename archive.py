@@ -44,7 +44,7 @@ import uuid
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 
-VERSION = "2.3.1"
+VERSION = "2.4.0"
 
 ARCHIVE_FOLDER = "ArchiveFamiliale"          # nom de dossier conseillé sur chaque disque
 CATALOG_DIR = "_catalogue"
@@ -56,6 +56,7 @@ HASH_ALGO = "blake2b-256"
 CHUNK = 4 * 1024 * 1024                      # taille des blocs de lecture
 SMALL_FILE = 64 * 1024 * 1024                # lu en une fois en mémoire (évite une seconde lecture)
 SLOW_DISK = 45 * 1024 ** 2                  # en dessous : sans doute branché en USB 2
+REVERIFY_DAYS = 365                          # une copie relue sans défaut n'est relue qu'un an plus tard
 SPEED_TEST_MIN = 1024 ** 3                   # mesure de vitesse seulement pour les imports d'au moins 1 Go
 WRITE_QUEUE_CHUNKS = 32                      # au plus 128 Mo en attente d'écriture (< marge d'espace libre)
 FREE_SPACE_MARGIN = 2 * 1024 ** 3            # toujours 2 Go libres sur chaque disque
@@ -86,6 +87,9 @@ WIN_SYSTEM_TOP = {
     "$winreagent", "$getcurrent", "$windows.~bt", "$windows.~ws", "$sysreset", "onedrivetemp",
     "intel", "amd", "nvidia", "drivers", "system.sav", "esd", "swsetup", "boot",
 }
+# Sur un disque Windows, seuls les profils (Users\…) sont lus : les autres dossiers de la racine sont
+# presque toujours des programmes ou des jeux. Ils sont listés à l'utilisateur, qui peut les ajouter.
+SKIP_OUTSIDE_USERS = "hors des dossiers des utilisateurs (disque Windows)"
 WIN_SKIP_PROFILES = {"default", "default user", "all users", "defaultapppool"}
 WIN_USER_SKIP = {"appdata", "application data", "local settings", "cookies", "nethood", "printhood",
                  "recent", "sendto", "start menu", "templates", "intelgraphicsprofiles", ".cache"}
@@ -985,10 +989,11 @@ def _child_mode(parent_mode, name_low: str, child_abs: str):
             return "win_users"
         if name_low == "windows.old" and is_windows_root(child_abs):
             return "win_root"
+        return "outside"
     elif parent_mode == "win_users":
         return "skip" if name_low in WIN_SKIP_PROFILES else "win_user"
     elif parent_mode == "win_user":
-        if name_low in WIN_USER_SKIP:
+        if name_low in WIN_USER_SKIP or name_low.startswith("."):   # .vscode, .nuget… : outils
             return "skip"
     elif parent_mode == "mac_root":
         if name_low in MAC_SYSTEM_TOP:
@@ -1001,6 +1006,16 @@ def _child_mode(parent_mode, name_low: str, child_abs: str):
         if name_low in MAC_USER_SKIP:
             return "skip"
     return None
+
+
+def print_outside(outside: list[str]):
+    """Signale les dossiers de la racine d'un disque Windows qui n'ont pas été lus."""
+    dirs = sorted(r.rstrip("/") for r in outside if r.endswith("/"))
+    if dirs:
+        shown = ", ".join(dirs[:15]) + (f" et {len(dirs) - 15} autres" if len(dirs) > 15 else "")
+        print(f"  Non lus (à la racine, hors des dossiers des utilisateurs) : {shown}.")
+        print("  S'il s'y trouve des fichiers personnels, importez ce dossier à part "
+              "(« Ajouter un dossier précis »).")
 
 
 def walk_source(root: str, include_trash: bool, on_skip, skip_top: str | None = None,
@@ -1053,10 +1068,16 @@ def walk_source(root: str, include_trash: bool, on_skip, skip_top: str | None = 
                         if cmode == "skip":
                             on_skip(rel + "/", "système / programmes ignorés (voir --inclure-systeme)")
                             continue
+                        if cmode == "outside":
+                            on_skip(rel + "/", SKIP_OUTSIDE_USERS)
+                            continue
                         stack.append((rel, keep_whole or matches_keep_whole(name), cmode))
                     elif de.is_file(follow_symlinks=False):
                         if exclusions and is_excluded_file(name):
                             on_skip(rel, "fichier système ignoré")
+                            continue
+                        if mode == "win_root" and not reldir:
+                            on_skip(rel, SKIP_OUTSIDE_USERS)
                             continue
                         st = de.stat(follow_symlinks=False)
                         if CLOUD_ATTRS & getattr(st, "st_file_attributes", 0):
@@ -1611,6 +1632,65 @@ def _register_source(ar: Archive, label: str, root: str, note: str | None, force
     return vname, vserial, vfs
 
 
+LAST_ESTIMATE: dict | None = None   # résultat de la dernière estimation (lu par l'interface)
+LAST_RUN: dict = {}                  # bilan chiffré du dernier import (lu par l'interface)
+
+
+def cmd_estimate(args) -> int:
+    """Estimation RAPIDE : liste les fichiers sans les lire. Un fichier est compté comme « sans doute
+    déjà présent » si un fichier de même nom et de même taille est déjà dans l'archive (ou plus haut
+    dans la liste des disques estimés). Rien n'est écrit dans le catalogue."""
+    global LAST_ESTIMATE
+    ar = Archive(args.master)
+    try:
+        known = {hash((size, rel.rsplit("/", 1)[-1].lower()))
+                 for size, rel in ar.db.execute("SELECT size, relpath FROM occurrences "
+                                                "WHERE status IN ('copied','duplicate')")}
+        roots = ar.resolve_roots(MAIN_SET)
+        free = 0
+        for vid, r in roots.items():
+            if r:
+                try:
+                    free += volume_free(r) - ar.margin(vid)
+                except OSError:
+                    pass
+        rows = []
+        for src in args.sources:
+            root = normalize_dir(src)
+            if not os.path.isdir(root):
+                print(f"\n{root} : introuvable, ignoré.")
+                rows.append({"source": root, "error": "introuvable"})
+                continue
+            print(f"\nEstimation de {root}…")
+            outside = []
+            entries = walk_source(root, False, lambda rel, reason: reason == SKIP_OUTSIDE_USERS
+                                  and outside.append(rel))
+            print_outside(outside)
+            total = dup = 0
+            for e in entries:
+                key = hash((e.size, e.rel.rsplit("/", 1)[-1].lower()))
+                total += e.size
+                if e.size and key in known:
+                    dup += e.size
+                else:
+                    known.add(key)
+            rows.append({"source": root, "files": len(entries), "total": total, "dup": dup, "new": total - dup})
+            print(f"  {fmt_int(len(entries))} fichiers, {fmt_size(total)} — sans doute déjà présents : "
+                  f"{fmt_size(dup)} — nouveaux : environ {fmt_size(total - dup)}")
+        new = sum(r.get("new", 0) for r in rows)
+        LAST_ESTIMATE = {"rows": rows, "new": new, "free": max(free, 0)}
+        print(f"\nAu total, environ {fmt_size(new)} de nouveau à copier ; place libre sur l'archive : "
+              f"{fmt_size(max(free, 0))}.")
+        if new > free:
+            print(f"  Il faudra sans doute environ {fmt_size(new - free)} de plus : prévoyez un disque d'archive "
+                  f"supplémentaire.")
+        print("  (Estimation rapide, d'après le nom et la taille des fichiers : l'import, qui compare le "
+              "contenu exact, trouvera parfois un peu plus de doublons.)")
+        return 0
+    finally:
+        ar.close()
+
+
 def cmd_option(args) -> int:
     ar = Archive(args.master)
     try:
@@ -1682,19 +1762,23 @@ def _ingest(ar: Archive, args, copy: bool) -> int:
         print(f"  (ce disque contient aussi {', '.join(inside)} : ce dossier est ignoré)")
     if not args.inclure_systeme:
         if is_windows_root(root):
-            print("  Installation Windows détectée : Windows, programmes et AppData sont ignorés ; "
-                  "seuls les fichiers des utilisateurs sont analysés (--inclure-systeme pour tout prendre).")
+            print("  Installation Windows détectée : seuls les dossiers des utilisateurs (Documents, Images, "
+                  "Bureau…) sont lus ; Windows, les programmes et AppData sont ignorés "
+                  "(--inclure-systeme pour tout prendre).")
         elif is_mac_root(root):
             print("  Installation macOS détectée : système, applications et Bibliothèques sont ignorés ; "
                   "seuls les fichiers des utilisateurs sont analysés (--inclure-systeme pour tout prendre).")
     print("Inventaire des fichiers…")
     ar.db.execute("DELETE FROM skipped WHERE label=?", (label,))
     st = RunStats()
+    outside = []
 
     def on_skip(rel, reason):
         st.skipped += 1
         ar.db.execute("INSERT OR REPLACE INTO skipped(label,relpath,reason) VALUES(?,?,?)",
                       (label, rel, reason))
+        if reason == SKIP_OUTSIDE_USERS:
+            outside.append(rel)
         if reason.startswith(("dossier illisible", "illisible")):
             log.warning("[%s] %s : %s", label, rel, reason)
 
@@ -1708,6 +1792,7 @@ def _ingest(ar: Archive, args, copy: bool) -> int:
     total_bytes = sum(e.size for e in entries)
     print(f"  {fmt_int(len(entries))} fichiers, {fmt_size(total_bytes)}"
           f"  ({fmt_int(st.skipped)} éléments ignorés)")
+    print_outside(outside)
     done_status = ("copied", "duplicate") if copy else ("scanned", "copied", "duplicate")
     done = {r[0] for r in ar.db.execute(   # déjà traités lors d'un passage précédent
         f"SELECT relpath FROM occurrences WHERE label=? AND status IN ({','.join('?' * len(done_status))})",
@@ -1760,8 +1845,10 @@ def _ingest(ar: Archive, args, copy: bool) -> int:
     ar.commit()   # attend la fin des écritures : les erreurs d'écriture sont comptées avant le bilan
 
     completed =copy and not interrupted and not fatal and st.errors == 0
-    ar.db.execute("UPDATE sources SET completed=?, last_seen=? WHERE label=?",
-                  (int(completed), now_iso(), label))
+    now = now_iso()
+    ar.db.execute("UPDATE sources SET completed=?, last_seen=? WHERE label=?", (int(completed), now, label))
+    if completed:   # import complet sans erreur : il vaut contrôle rapide, inutile de rebrancher le disque
+        ar.db.execute("UPDATE sources SET last_check=?, last_check_status='ok' WHERE label=?", (now, label))
     ar.db.commit()
     if copy:
         ar.rotate_snapshots()
@@ -1789,6 +1876,9 @@ def _ingest(ar: Archive, args, copy: bool) -> int:
     if st.errors > len(st.error_samples):
         print(f"    … liste complète : python archive.py exporter -m \"{ar.root}\"")
     log.info("Fin %s %s : copiés=%s doublons=%s erreurs=%s", mode, label, st.copied, st.duplicates, st.errors)
+    LAST_RUN.clear()
+    LAST_RUN.update(copied=st.copied, copied_bytes=st.copied_bytes, duplicates=st.duplicates,
+                    duplicate_bytes=st.duplicate_bytes, errors=st.errors, elapsed=elapsed)
 
     if fatal:
         print(f"\nARRÊT : {fatal}")
@@ -2073,20 +2163,32 @@ def _verify(args) -> int:
             bset = ar.backup_set(args.jeu)
             set_id, what = bset["id"], f"du jeu de sauvegarde « {bset['name']} »"
             rows = ar.db.execute("SELECT COALESCE(b.phys_path, b.path) AS path, b.path AS logical, b.volume, "
-                                 "s.hash, s.size FROM backup_copies b "
+                                 "s.hash, s.size, b.verified_at, b.verify_status FROM backup_copies b "
                                  "JOIN stored s ON s.path=b.path WHERE b.set_id=? ORDER BY b.volume, b.path",
                                  (set_id,)).fetchall()
         else:
             set_id, what = MAIN_SET, "de l'archive"
-            rows = ar.db.execute("SELECT path, volume, hash, size FROM stored ORDER BY volume, path").fetchall()
+            rows = ar.db.execute("SELECT path, volume, hash, size, verified_at, verify_status FROM stored "
+                                 "ORDER BY volume, path").fetchall()
+        # Relecture complète seulement de ce qui n'a jamais été relu, de ce qui était en défaut et de ce
+        # qui a été relu il y a plus d'un an ; le reste est seulement contrôlé (présence et taille). Une
+        # vérification interrompue reprend donc là où elle en était, et après un nouvel import seuls
+        # les nouveaux fichiers sont relus.
+        fresh = set()
+        if not args.rapide and not args.tout:
+            limit = (dt.datetime.now() - dt.timedelta(days=REVERIFY_DAYS)).isoformat(timespec="seconds")
+            fresh = {r["path"] for r in rows if r["verify_status"] == "ok" and (r["verified_at"] or "") >= limit}
         roots = ar.resolve_roots(set_id)
         names = {v["id"]: v["name"] for v in ar.volumes(set_id)}
         to_check = [r for r in rows if roots.get(r["volume"])]
         unplugged = Counter(r["volume"] for r in rows if not roots.get(r["volume"]))
-        total = sum(r["size"] for r in to_check)
+        total = sum(r["size"] for r in to_check if r["path"] not in fresh)
         mode = "rapide (présence + taille)" if args.rapide else "complète (relecture + empreinte)"
         print(f"Vérification {mode} {what}")
         print(f"  {fmt_int(len(to_check))} fichiers à vérifier sur les disques branchés, {fmt_size(total)}")
+        if fresh:
+            print(f"  dont {fmt_int(len(fresh))} déjà relus sans défaut depuis moins d'un an : seulement "
+                  f"contrôlés (présence et taille) ; --tout pour tout relire")
         log.info("=== Vérification %s %s", mode, what)
         progress = Progress(len(to_check), total)
         problems = []
@@ -2100,7 +2202,7 @@ def _verify(args) -> int:
                     stt = os.stat(lp(p))
                     if stt.st_size != r["size"]:
                         status = "taille différente"
-                    elif not args.rapide:
+                    elif not args.rapide and r["path"] not in fresh:
                         if hash_file(p, progress) != r["hash"]:
                             status = "corrompu"
                 except FileNotFoundError:
@@ -2111,7 +2213,7 @@ def _verify(args) -> int:
                     problems.append((names.get(r["volume"], "?"), r["path"], status))
                     bad_vols[r["volume"]] += 1
                     log.error("Vérif %s [%s] : %s", r["path"], names.get(r["volume"]), status)
-                if not args.rapide:
+                if not args.rapide and (r["path"] not in fresh or status != "ok"):
                     if set_id == MAIN_SET:
                         ar.db.execute("UPDATE stored SET verified_at=?, verify_status=? WHERE path=?",
                                       (now_iso(), status, r["path"]))
@@ -2119,7 +2221,7 @@ def _verify(args) -> int:
                         ar.db.execute("UPDATE backup_copies SET verified_at=?, verify_status=? "
                                       "WHERE set_id=? AND path=?", (now_iso(), status, set_id, r["logical"]))
                     ar.maybe_commit()
-                progress.file_done(r["size"])
+                progress.file_done(0 if r["path"] in fresh else r["size"])
         except KeyboardInterrupt:
             interrupted = True
         progress.finish()
@@ -2129,7 +2231,9 @@ def _verify(args) -> int:
         orphans = []
         if not interrupted:
             known = defaultdict(set)
-            for r in rows:
+            for r in ar.db.execute("SELECT COALESCE(phys_path, path) AS path, volume FROM backup_copies "
+                                   "WHERE set_id=?", (set_id,)) if args.jeu else \
+                    ar.db.execute("SELECT path, volume FROM stored"):
                 known[r["volume"]].add(r["path"].lower())
             try:
                 for vid, root in roots.items():
@@ -2380,6 +2484,10 @@ def _backup(args) -> int:
                         problems.append((r["path"], "le fichier de l'ARCHIVE ne correspond plus à son "
                                                     "empreinte (corrompu ?) — lancez une vérification"))
                         break
+                    # Le fichier de l'archive vient d'être relu en entier et son empreinte est bonne :
+                    # c'est une vérification, inutile de le relire à l'étape « Vérifier l'archive ».
+                    ar.db.execute("UPDATE stored SET verified_at=?, verify_status='ok' WHERE path=?",
+                                  (now_iso(), r["path"]))
                     ar.db.execute("INSERT INTO backup_copies(set_id,path,volume,size,copied_at) VALUES(?,?,?,?,?) "
                                   "ON CONFLICT(set_id,path) DO UPDATE SET volume=excluded.volume, "
                                   "size=excluded.size, copied_at=excluded.copied_at, verified_at=NULL, "
@@ -2637,6 +2745,12 @@ def build_parser() -> argparse.ArgumentParser:
                     help="« non » : pas de jeu de sauvegarde, l'archive est la seule copie (déconseillé)")
     sp.set_defaults(func=cmd_option)
 
+    sp = sub.add_parser("estimer", help="estimation rapide de ce que des disques apporteraient (rien n'est lu "
+                                        "ni enregistré : noms et tailles seulement)")
+    sp.add_argument("sources", nargs="+", metavar="SOURCE", help="disques ou dossiers à estimer")
+    master_opt(sp)
+    sp.set_defaults(func=cmd_estimate)
+
     sp = sub.add_parser("rapport", help="état des disques, des sources et des sauvegardes")
     master_opt(sp)
     sp.set_defaults(func=cmd_report)
@@ -2650,6 +2764,8 @@ def build_parser() -> argparse.ArgumentParser:
     master_opt(sp)
     sp.add_argument("--jeu", help="vérifier ce jeu de sauvegarde au lieu de l'archive")
     sp.add_argument("--rapide", action="store_true", help="présence et taille seulement (sans relecture)")
+    sp.add_argument("--tout", action="store_true",
+                    help="relire tous les fichiers, même ceux relus sans défaut depuis moins d'un an")
     sp.set_defaults(func=cmd_verify)
 
     sp = sub.add_parser("controler", help="tout le contenu de cette source est-il dans l'archive ?")

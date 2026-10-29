@@ -69,18 +69,24 @@ et à mesure.
 | | Étape | Ce que vous faites |
 |---|---|---|
 | 1️⃣ | **Créer l'archive** | Branchez un disque **neuf** et cliquez sur « Créer l'archive ». Il devient `ARCHIVE-1`. S'il n'y a plus de place un jour, ajoutez un deuxième disque : `ARCHIVE-2`. |
-| 2️⃣ | **Importer les anciens disques** | Branchez un ou **plusieurs** anciens disques, cliquez sur « Importer des disques », cochez-les et vérifiez leur nom (par exemple `Disque-noir-du-bureau`). Ils sont importés **l'un après l'autre**, même si vous partez : vous retrouvez un bilan disque par disque. |
-| 3️⃣ | **Vérifier l'archive** | Quand tout est importé, cliquez sur « Vérifier maintenant ». Le programme relit tout et confirme que rien n'est abîmé. |
+| 2️⃣ | **Importer les anciens disques** | Branchez un ou **plusieurs** anciens disques, cliquez sur « Choisir les disques » et cochez-les : ils s'ajoutent à la liste, « en attente ». Puis cliquez sur **« Démarrer l'import »** : ils sont importés **l'un après l'autre**, même si vous partez. |
+| 3️⃣ | **Vérifier l'archive** | Quand tout est importé, cliquez sur « Vérifier maintenant ». Le programme relit les fichiers et confirme que rien n'est abîmé (la fois suivante, il ne relit que les nouveaux). |
 | 4️⃣ | **Faire des sauvegardes** | Branchez un autre disque neuf et cliquez sur « Créer un jeu de sauvegarde ». Faites-en **deux**, et rangez-en un **hors de la maison** (chez un proche, au travail…). |
-| 5️⃣ | **Contrôler les anciens disques** | Avant de ranger ou de donner un ancien disque, rebranchez-le et cliquez sur « Contrôler un ancien disque ». Si la réponse est **OUI**, tout son contenu est dans l'archive. |
+| 5️⃣ | **Contrôler les anciens disques** | Un disque importé sans erreur est déjà contrôlé. Si vous l'avez modifié depuis, rebranchez-le et cliquez sur « Contrôler un ancien disque » : si la réponse est **OUI**, tout son contenu est dans l'archive. |
 | ✨ | *Classer (facultatif)* | Rangez tout par type et par date : `Photos et vidéos / 2009 / 2009-08 Vacances Bretagne`. Vous voyez un aperçu avant de valider, et vous pouvez annuler. |
 
 ### Importer plusieurs disques d'un coup
 
-Branchez tous vos anciens disques, cochez-les et lancez : ils passent l'un après l'autre pendant que
-vous êtes au travail ou que vous dormez. Le programme vous dit à l'avance si l'archive a assez de place.
+1. Branchez tous vos anciens disques et cliquez sur **« Choisir les disques »**. Cochez-les et vérifiez
+   leur nom (à écrire sur une étiquette). Le programme vous dit si l'archive a assez de place.
+2. Les disques s'ajoutent au tableau, **en attente**. Pour chacun, il indique s'il est nouveau, déjà
+   commencé ou déjà terminé.
+3. Cliquez sur **« Démarrer l'import »**. Ils passent l'un après l'autre, en commençant par ceux qui
+   étaient déjà commencés, pendant que vous êtes au travail ou que vous dormez.
 
 ![Choisir plusieurs disques à importer à la suite](docs/images/plusieurs-disques.png)
+
+![Les disques en attente, prêts à être importés](docs/images/en-attente.png)
 
 > ⚠️ **Ne jetez et n'effacez aucun ancien disque** avant que l'étape 5 ait dit OUI pour ce disque
 > **et** que vos sauvegardes soient à jour.
@@ -89,10 +95,31 @@ vous êtes au travail ou que vous dormez. Le programme vous dit à l'avance si l
 
 Une carte bleue en bas de la fenêtre montre ce qui se passe : la progression, la vitesse et le temps
 restant. Vous pouvez cliquer sur **Mettre en pause** à tout moment : rien n'est perdu. Vous pouvez alors
-fermer le programme, et même éteindre ou déplacer l'ordinateur : au prochain lancement, un bouton
-**« Reprendre l'import »** repart exactement là où vous en étiez.
+fermer le programme, et même éteindre ou déplacer l'ordinateur : au prochain lancement, la liste
+d'attente est toujours là, et **« Démarrer l'import »** repart exactement là où vous en étiez.
 
 ![Un import en cours, avec la progression et le temps restant](docs/images/import-en-cours.png)
+
+### Être prévenu sur son téléphone 📱
+
+Pas besoin de surveiller l'écran : le programme peut vous envoyer un message sur votre téléphone quand
+un disque est terminé, quand il faut brancher un nouveau disque, et quand tout est fini. C'est gratuit
+et sans compte.
+
+1. Sur le téléphone, installez l'application gratuite **ntfy** : Play Store (Android) ou App Store
+   (iPhone), cherchez « ntfy ». À la première ouverture, acceptez les notifications.
+2. Dans Archive Familiale, cliquez sur **« Téléphone… »**, en haut de la fenêtre.
+   - **Android** : visez le code carré avec l'appareil photo et touchez le lien qui apparaît. ntfy
+     s'ouvre et s'abonne tout seul.
+   - **iPhone** : dans ntfy, touchez **+**, recopiez le nom affiché (par exemple `archive-k3x9…`), puis
+     touchez « S'abonner ».
+3. Cliquez sur **« Envoyer un message d'essai »** : il doit arriver sur le téléphone en quelques
+   secondes.
+
+![La fenêtre « Téléphone » : un code à viser avec l'appareil photo](docs/images/telephone.png)
+
+> 🔒 Les messages contiennent seulement des noms de disques et des chiffres, jamais vos fichiers.
+> Ce nom est secret : ne le donnez qu'à la famille, qui peut s'abonner aussi.
 
 ---
 
@@ -119,6 +146,14 @@ fermer le programme, et même éteindre ou déplacer l'ordinateur : au prochain 
 Comptez environ **2 à 3 heures par téraoctet** (1 To = 1 000 Go) avec un disque branché en USB 3.
 Au début de chaque import, le programme mesure la vitesse de vos disques et annonce une durée
 estimée. Vous pouvez arrêter et reprendre plus tard autant de fois que vous voulez.
+</details>
+
+<details>
+<summary><b>Comment savoir à l'avance si l'archive sera assez grande ?</b></summary>
+
+Cliquez sur « Estimer la place nécessaire » à l'étape 2 et cochez vos disques. En quelques minutes, sans
+rien copier, le programme estime ce qu'ils apporteraient de nouveau (en tenant compte des doublons
+évidents) et vous dit s'il faut prévoir un disque d'archive de plus.
 </details>
 
 <details>
@@ -177,9 +212,14 @@ le relancer sur n'importe quel ordinateur.
 <details>
 <summary><b>Puis-je importer le disque interne d'un ordinateur ?</b></summary>
 
-Oui. Sur un disque qui contient Windows (ou macOS), seuls les fichiers des utilisateurs sont pris :
-Windows, les programmes et les fichiers système sont ignorés. Les fichiers OneDrive « en ligne
-uniquement » sont ignorés aussi (ils ne sont pas vraiment sur le disque).
+Oui. Sur un disque qui contient Windows (comme le `C:`), le programme ne lit que les **dossiers des
+utilisateurs** : Documents, Images, Bureau, Vidéos, Musique, Téléchargements… Windows, les programmes,
+les jeux et les réglages des applications sont ignorés.
+
+Les autres dossiers placés à la racine du disque (par exemple `C:\Jeux`) sont ignorés aussi, mais le
+programme les liste à la fin de l'inventaire. Si l'un d'eux contient des photos ou des documents,
+ajoutez-le avec « Ajouter un dossier précis » dans la fenêtre de choix des disques. Les fichiers
+OneDrive « en ligne uniquement » sont ignorés (ils ne sont pas vraiment sur le disque).
 </details>
 
 <details>

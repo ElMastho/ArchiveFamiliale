@@ -89,7 +89,8 @@ python archive.py scanner   E:\  -m F:\ArchiveFamiliale -l "Disque01-WD-bleu" --
 python archive.py importer  E:\  -m F:\ArchiveFamiliale -l "Disque01-WD-bleu"
 python archive.py rapport        -m F:\ArchiveFamiliale
 python archive.py exporter       -m F:\ArchiveFamiliale
-python archive.py verifier       -m F:\ArchiveFamiliale [--rapide]
+python archive.py estimer   E:\ G:\ -m F:\ArchiveFamiliale
+python archive.py verifier       -m F:\ArchiveFamiliale [--rapide | --tout]
 python archive.py controler E:\  -m F:\ArchiveFamiliale -l "Disque01-WD-bleu" [--profond]
 python archive.py ajouter-disque H:\ArchiveFamiliale -m F:\ArchiveFamiliale --jeu Sauvegarde-A
 python archive.py sauvegarder    -m F:\ArchiveFamiliale --jeu Sauvegarde-A [--profond]
@@ -107,11 +108,12 @@ python archive.py reparer-catalogue --copie G:\ArchiveFamiliale\_catalogue\catal
 | `init` | Crée l'archive et son disque `ARCHIVE-1`. |
 | `option` | `--sauvegardes non` : pas de jeu de sauvegarde, par choix (l'interface n'y pousse plus). `--sauvegardes oui` pour revenir en arrière. Créer un jeu réactive aussi les sauvegardes. |
 | `ajouter-disque` | Ajoute un disque à l'archive (`ARCHIVE-n`), ou à un jeu de sauvegarde avec `--jeu` (le jeu est créé s'il n'existe pas). Le dossier doit être vide. |
-| `scanner` | Calcule les empreintes **sans rien copier**. Sert à estimer la taille réelle avant d'acheter les disques. Un `importer` qui suit réutilise ces empreintes. |
+| `estimer` | Estimation **rapide** de ce que des disques apporteraient (noms et tailles des fichiers, comparés au catalogue et entre eux). Rien n'est lu ni enregistré ; utilisée par le bouton « Estimer la place nécessaire ». |
+| `scanner` | Calcule les empreintes **sans rien copier** (relit tout : aussi long qu'un import). Un `importer` qui suit réutilise ces empreintes. |
 | `importer` | Copie le contenu nouveau sur les disques de l'archive (voir [Performances](#performances)). `--ordre-dossiers` lit dossier par dossier au lieu de suivre l'emplacement physique des fichiers. |
 | `rapport` | Disques de l'archive (branchés ou non, remplissage, vérification), sources, contenu exclusif à chaque source, total unique, taux de doublons, jeux de sauvegarde. |
 | `exporter` | `inventaire.csv`, `stockage.csv` (avec le disque de chaque fichier), `doublons.csv`, `ignores_et_erreurs.csv`, `sauvegardes.csv`. Séparateur `;`, UTF-8 avec BOM pour Excel. |
-| `verifier` | Relit chaque fichier des disques branchés et compare son empreinte. Détecte les fichiers manquants, corrompus et non catalogués, et indique les disques non branchés (non vérifiés). `--jeu` vérifie un jeu de sauvegarde. |
+| `verifier` | Relit les fichiers des disques branchés et compare leur empreinte : seulement ceux jamais relus, en défaut ou relus il y a plus d'un an (`--tout` : tous) ; les autres sont contrôlés en présence et en taille. Une vérification interrompue reprend où elle en était. Détecte les fichiers manquants, corrompus et non catalogués, et indique les disques non branchés (non vérifiés). `--jeu` vérifie un jeu de sauvegarde. |
 | `controler` | « Puis-je me séparer de ce disque ? » Chaque fichier de la source doit être catalogué, inchangé, et sa copie saine. `--profond` relit et recompare. |
 | `sauvegarder` | Copie dans un jeu ce qui lui manque, en répartissant sur ses disques branchés, et vérifie chaque copie par empreinte. Indique ce qui reste à faire : disque à brancher, ou place à ajouter. |
 | `classer` | `--modele A\|B\|C` : calcule et affiche le plan de classement (simulation). Avec `--appliquer`, déplace réellement les fichiers. Tous les disques de l'archive doivent être branchés. |
@@ -172,9 +174,10 @@ fichiers : 5,3 ms puis 2,3 ms par fichier. Le catalogue pèse environ 300 octets
 - **Bibliothèques Apple Photos, iPhoto, Aperture, Lightroom, iMovie**, et structures DVD ou caméscope
   (`VIDEO_TS`, `AVCHD`, `BDMV`…) : copiées **entières**, sans dédoublonnage interne, pour qu'elles
   restent ouvrables.
-- **Disque contenant Windows** : seuls les fichiers des utilisateurs sont analysés. Windows, Program
-  Files, ProgramData, les dossiers AppData et les profils système sont ignorés (`--inclure-systeme`
-  pour tout prendre). Le contenu de `Windows.old\Users` est conservé. **Disque macOS** : même principe
+- **Disque contenant Windows** : seuls les profils de `Users\` sont lus (sans AppData, sans les
+  dossiers techniques commençant par un point, sans les profils système). Tout le reste de la racine
+  (Windows, Program Files, jeux, outils…) est ignoré ; les dossiers non système ainsi écartés sont
+  listés à l'inventaire, pour être importés à part si besoin (`--inclure-systeme` pour tout prendre). Le contenu de `Windows.old\Users` est conservé. **Disque macOS** : même principe
   (System, Applications, Library, `~/Library`).
 - **OneDrive, iCloud…** : les fichiers « en ligne uniquement » sont ignorés (sinon leur lecture
   déclencherait le téléchargement de tout le cloud) et listés dans `ignores_et_erreurs.csv`.
@@ -214,14 +217,26 @@ fichiers : 5,3 ms puis 2,3 ms par fichier. Le catalogue pèse environ 300 octets
 
 - `archive_gui.py` appelle les commandes du moteur dans un fil de travail (`run_jobs`) ; la sortie
   texte alimente la zone « Activité » et la barre de progression (`Progress.hook`).
-- **File d'import** (`start_queue`) : les disques cochés dans `SourcesDialog` sont importés un par un,
-  chacun par une commande `importer` distincte. Codes de retour : 0 ✅, 1 ⚠️ (fichiers illisibles),
+- **Liste d'attente** : « Choisir les disques » (`SourcesDialog` → `plan_disks`) ajoute les disques
+  à la liste sans rien lancer ; le tableau de l'étape 2 donne leur pré-analyse (`_plan_state` :
+  nouveau, déjà commencé, déjà terminé). « Démarrer l'import » (`start_import`) trie la liste (déjà
+  commencés d'abord, déjà terminés à la fin) puis importe les disques un par un, chacun par une
+  commande `importer` distincte. Codes de retour : 0 ✅, 1 ⚠️ (fichiers illisibles),
   2/99 ❌ (disque suivant) ; 3 (archive pleine) et 130 (arrêt) mettent la file en **pause** sur le
   disque en cours. « Reprendre l'import », ou l'ajout d'un disque à l'archive pendant une pause
   « plein », relance ce disque (le moteur saute ce qui est déjà fait) puis les suivants. Chaque disque
   est retrouvé par son numéro de série de volume avant son tour, au cas où sa lettre aurait changé. La
   file est enregistrée dans `config.json` (clé `file_import`) à chaque changement : après une
   fermeture ou un redémarrage, elle est rechargée en pause et « Reprendre l'import » la relance.
+- Refus des doubles lectures dans `SourcesDialog` : le même disque (numéro de série) sous un autre nom,
+  deux chemins cochés l'un dans l'autre ; avertissement pour un dossier d'un disque déjà importé en
+  entier. Les disques de l'archive et des sauvegardes sont grisés.
+- **Notifications** (`notif.py`) : publication JSON sur `https://ntfy.sh` (configurable :
+  `ntfy_serveur`), sujet secret aléatoire `archive-xxxxxxxxxxxx` (`ntfy_sujet`), en arrière-plan,
+  sans jamais bloquer. Envoyées : fin de chaque disque de la file (bilan chiffré `LAST_RUN`), archive
+  pleine (priorité 5), fin de la file, fin de toute opération de plus de 10 minutes, point
+  d'avancement horaire (`ntfy_avancement`). Abonnement Android par lien `ntfy://ntfy.sh/<sujet>`
+  affiché en QR code (bibliothèque `qrcode`, facultative) ; iPhone : saisie du sujet.
 - Le temps restant pour l'ensemble de la file est extrapolé de la vitesse moyenne observée et de
   l'espace occupé sur chaque disque (approximatif : les doublons vont plus vite).
 - `theme.py` s'appuie sur [Sun Valley](https://github.com/rdbende/Sun-Valley-ttk-theme) (`sv-ttk`,

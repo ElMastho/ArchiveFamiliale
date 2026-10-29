@@ -2,6 +2,39 @@
 
 Les notes de chaque version publiée sur GitHub sont reprises de ce fichier.
 
+## [2.4.0] - 2026-10-29
+
+### Import en deux temps
+- Étape 2 : « Choisir les disques… » ajoute les disques à une liste d'attente, visible dans le
+  tableau, avec une pré-analyse pour chacun (nouveau, déjà commencé, déjà terminé). « Démarrer
+  l'import » les traite ensuite l'un après l'autre, en reprenant d'abord ceux déjà commencés.
+  « Retirer de la liste » enlève un disque en attente.
+- La carte du haut affiche l'opération en cours au lieu de rester sur « Reprendre l'import ».
+
+### Notifications sur le téléphone
+- Bouton « Téléphone… » : notifications gratuites avec l'application ntfy (Android et iPhone), avec
+  un mode d'emploi pas à pas, un QR code pour s'abonner en un geste sur Android et un message d'essai.
+- Messages envoyés : fin de chaque disque (avec le nombre de fichiers nouveaux et de doublons),
+  archive pleine, fin de l'import, fin de toute opération de plus de 10 minutes, et un point
+  d'avancement toutes les heures (désactivable).
+
+### Moins de travail inutile
+- Disque Windows : seuls les dossiers des utilisateurs sont lus. Les autres dossiers de la racine
+  (programmes, jeux…) sont ignorés et listés ; les dossiers techniques des profils (`.vscode`…) aussi.
+- « Estimer la place nécessaire… » : estimation rapide (noms et tailles des fichiers, quelques
+  minutes), sans rien lire ni enregistrer, au lieu d'une relecture complète aussi longue qu'un import.
+  Elle dit s'il faudra un disque d'archive de plus.
+- Vérification de l'archive et des sauvegardes : seuls les fichiers jamais relus (ou relus il y a plus
+  d'un an) sont relus ; les autres sont contrôlés en présence et en taille. Une vérification
+  interrompue reprend où elle en était. `verifier --tout` relit tout.
+- Une sauvegarde relit chaque fichier de l'archive qu'elle copie : il compte désormais comme vérifié.
+- Un import terminé sans erreur vaut contrôle de l'ancien disque (étape 5).
+- Refus d'importer un disque déjà importé sous un autre nom, ou deux dossiers l'un dans l'autre.
+- Les simples estimations faites avec une version précédente ne bloquent plus les étapes 2 et 5.
+
+### Affichage
+- Les icônes (coches vertes, icône d'activité…) ne sont plus rognées sur la droite en plein écran.
+
 ## [2.3.1] - 2026-10-29
 
 ### Corrigé

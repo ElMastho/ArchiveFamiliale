@@ -13,7 +13,7 @@ if not exist .build-venv (
     py -3 -m venv .build-venv || python -m venv .build-venv || goto :error
 )
 call .build-venv\Scripts\activate.bat || goto :error
-python -m pip install --upgrade pip pyinstaller sv-ttk || goto :error
+python -m pip install --upgrade pip pyinstaller sv-ttk qrcode || goto :error
 
 echo.
 echo Tests...

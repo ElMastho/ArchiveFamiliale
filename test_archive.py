@@ -15,6 +15,7 @@ import zipfile
 
 import archive
 import maj
+import notif
 
 KB = 1024
 
@@ -209,10 +210,26 @@ class SingleDiskTest(Base):
         self.assertEqual(run("verifier", "-m", self.master)[0], 0)
         write(os.path.join(self.master, "Disque1", "Photos", "2009", "IMG_001.JPG"), b"PHOTO-1" * 1000)
         os.remove(os.path.join(self.master, "Disque1", "Photos", "2009", "IMG_002.JPG"))
-        rc, out = run("verifier", "-m", self.master)
+        rc, out = run("verifier", "-m", self.master)   # déjà relus : présence et taille seulement
+        self.assertEqual(rc, 1)
+        self.assertIn("manquant", out)
+        self.assertNotIn("corrompu", out)
+        rc, out = run("verifier", "-m", self.master, "--tout")
         self.assertEqual(rc, 1)
         self.assertIn("corrompu", out)
         self.assertIn("manquant", out)
+
+    def test_quick_estimate(self):
+        """Estimation rapide : rien n'est enregistré, les doublons évidents sont repérés."""
+        run("importer", self.src1, "-m", self.master, "-l", "Disque1")
+        before = self.q("SELECT COUNT(*) FROM occurrences")[0][0]
+        rc, out = run("estimer", self.src2, self.src1, "-m", self.master)
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(self.q("SELECT COUNT(*) FROM occurrences")[0][0], before)
+        self.assertEqual(self.q("SELECT COUNT(*) FROM sources")[0][0], 1)
+        rows = archive.LAST_ESTIMATE["rows"]
+        self.assertEqual(rows[0]["new"], 5 * 5000)        # la vidéo ; IMG_001.JPG est déjà là
+        self.assertEqual(rows[1]["new"], 0)               # disque déjà importé : rien de nouveau
 
     def test_check_source(self):
         run("importer", self.src1, "-m", self.master, "-l", "Disque1")
@@ -258,15 +275,18 @@ class PcDisksTest(Base):
         c = os.path.join(self.tmp, "C")
         for rel in ("Windows/System32/kernel.dll", "Program Files/App/app.exe", "ProgramData/x.dat",
                     "Users/bob/AppData/Local/cache.bin", "Users/bob/NTUSER.DAT", "Users/Default/x.txt",
-                    "Windows.old/Windows/System32/old.dll", "Windows.old/Program Files/a.exe"):
+                    "Windows.old/Windows/System32/old.dll", "Windows.old/Program Files/a.exe",
+                    "Riot Games/jeu.pak", "Photos scannées/1990.jpg", "Users/bob/.vscode/x.json", "notes.txt"):
             write(os.path.join(c, rel), rel.encode())
         keep = ["Users/bob/Pictures/vacances.jpg", "Users/bob/Documents/lettre.doc",
-                "Windows.old/Users/bob/Documents/ancien.doc", "Photos scannées/1990.jpg"]
+                "Windows.old/Users/bob/Documents/ancien.doc"]
         for rel in keep:
             write(os.path.join(c, rel), rel.encode() * 10)
         rc, out = run("importer", c, "-m", self.master, "-l", "PC-C")
         self.assertEqual(rc, 0, out)
         self.assertIn("Installation Windows détectée", out)
+        self.assertIn("Non lus (à la racine, hors des dossiers des utilisateurs) : Photos scannées, Riot Games.",
+                      out)
         self.assertEqual(self.stored_paths(), sorted("PC-C/" + k for k in keep))
         # contrôle cohérent avec les mêmes exclusions
         self.assertEqual(run("controler", c, "-m", self.master, "-l", "PC-C")[0], 0)
@@ -718,9 +738,9 @@ class GuiTest(Base):
             app.destroy()
             archive.volume_free = free
             app = self.open_app(keep_config=True)
-            self.assertEqual(app.iq["paused"], "arrêt")
+            self.assertEqual(app.iq["paused"], "attente")
             self.assertEqual([it["label"] for it in app.iq["items"]], ["Disque1", "Disque2"])
-            self.assertEqual(app.hero_btn.cget("text"), "Reprendre l'import")
+            self.assertEqual(app.hero_btn.cget("text"), "Démarrer l'import")
             app.resume_queue()
             end = time.monotonic() + 30
             while app.iq is not None or app.busy:
@@ -729,6 +749,33 @@ class GuiTest(Base):
         self.assertEqual(len(self.stored_paths()), 5)
         self.assertIn("✅  Disque2", mb.showinfo.call_args[0][1])
         self.assertNotIn("file_import", archive_gui.load_config())
+
+    def test_plan_then_start(self):
+        """Choisir les disques les met en attente ; « Démarrer » reprend d'abord ceux déjà commencés."""
+        from unittest import mock
+        import archive_gui
+        run("importer", self.src2, "-m", self.master, "-l", "Disque2")
+        with contextlib.closing(self.db()) as con:   # import de Disque2 resté incomplet
+            con.execute("UPDATE sources SET completed=0")
+            con.commit()
+        app = self.open_app()
+        app.plan_disks([{"path": p, "label": lab, "note": "", "serial": None, "size": 1000}
+                        for p, lab in ((self.src1, "Disque1"), (self.src2, "Disque2"))])
+        self.assertFalse(app.busy)
+        self.assertEqual(app.steps[2]["kind"], "warn")
+        self.assertIn("1 déjà commencé(s), repris en premier", app.steps[2]["status"].cget("text"))
+        self.assertEqual(app.tree_src.set("Disque1", "etat"), "⏳ En attente (pas commencé)")
+        self.assertEqual(app.hero_btn.cget("text"), "Démarrer l'import")
+        self.assertEqual(str(app.btn_start.cget("state")), "normal")
+        with mock.patch.object(archive_gui, "messagebox") as mb:
+            app.start_import()
+            end = time.monotonic() + 30
+            while app.iq is not None or app.busy:
+                self.assertLess(time.monotonic(), end)
+                app.update()
+        msg = mb.showinfo.call_args[0][1]
+        self.assertLess(msg.index("Disque2"), msg.index("Disque1"))
+        self.assertEqual(len(self.stored_paths()), 5)
 
     def test_archive_disks_not_importable(self):
         """Dans le choix des disques à importer, les disques de l'archive sont grisés."""
@@ -753,6 +800,36 @@ class GuiTest(Base):
         app = self.open_app()
         self.assertIsNone(app.master_path)
         self.assertEqual(app.hero_title.cget("text"), "Créer votre archive")
+
+
+class NotifTest(unittest.TestCase):
+    def test_send_and_links(self):
+        from unittest import mock
+        cfg = {"ntfy_sujet": notif.new_topic(), "ntfy_actif": True}
+        n = notif.Notifier(cfg)
+        self.assertRegex(n.topic, r"^archive-[a-z2-9]{12}$")
+        self.assertEqual(n.app_link(), f"ntfy://ntfy.sh/{n.topic}?display=Archive+Familiale")
+        sent = []
+
+        class Resp(io.BytesIO):
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+        def urlopen(req, timeout):
+            sent.append(json.loads(req.data))
+            return Resp(b"{}")
+
+        with mock.patch("urllib.request.urlopen", urlopen):
+            self.assertIsNone(n.send("Titre", "Disque « é » terminé", tags=("tada",), wait=True))
+            cfg["ntfy_actif"] = False
+            n.send("Rien", "désactivé", wait=True)
+        self.assertEqual(sent, [{"topic": n.topic, "title": "Titre", "message": "Disque « é » terminé",
+                                 "priority": 3, "tags": ["tada"]}])
+        with mock.patch("urllib.request.urlopen", side_effect=OSError("pas de réseau")):
+            self.assertIsInstance(n.send("x", "y", force=True, wait=True), OSError)
 
 
 class UpdateTest(unittest.TestCase):

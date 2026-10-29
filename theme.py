@@ -119,8 +119,11 @@ def _surface(style: ttk.Style, master, name: str, fill: str, border: str, behind
                          ("Title", {"foreground": TEXT, "font": "AFSubtitle"}),
                          ("Big", {"foreground": TEXT, "font": "AFBig"}),
                          ("Kicker", {"foreground": ACCENT, "font": "AFKicker"}),
-                         ("Icon", {"foreground": ACCENT, "font": "AFIcon"}),
-                         ("IconBig", {"foreground": ACCENT, "font": "AFIconBig"})):
+                         # Le dessin des icônes déborde un peu de leur largeur nominale : une petite
+                         # marge évite qu'il soit rogné à droite (coches, flèches d'activité…).
+                         ("Icon", {"foreground": ACCENT, "font": "AFIcon", "padding": (px(2), 0, px(4), 0)}),
+                         ("IconBig", {"foreground": ACCENT, "font": "AFIconBig",
+                                      "padding": (px(2), 0, px(6), 0)})):
         style.configure(f"{name}{suffix}.TLabel", background=fill, **opts)
     return img
 
