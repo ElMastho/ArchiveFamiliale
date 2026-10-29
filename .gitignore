@@ -1,0 +1,30 @@
+# Environnements et caches Python
+.build-venv/
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+
+# Sorties de construction (publiées par la CI dans les releases, jamais dans le dépôt)
+build/
+dist/
+*.spec
+
+# Fichiers de travail
+*.partial
+*.log
+notes.md
+.vscode/
+.idea/
+.claude/
+
+# Données personnelles : jamais d'archive, de catalogue ou d'export dans le dépôt
+_catalogue/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.csv
+
+# Windows
+Thumbs.db
+desktop.ini
