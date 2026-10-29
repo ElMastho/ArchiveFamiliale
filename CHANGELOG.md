@@ -2,7 +2,7 @@
 
 Les notes de chaque version publiée sur GitHub sont reprises de ce fichier.
 
-## [2.7.0] - 2026-10-29
+## [2.7.1] - 2026-10-29
 
 ### Documents importants
 - Le programme repère les papiers qui comptent : identité et état civil, travail et salaires, diplômes,

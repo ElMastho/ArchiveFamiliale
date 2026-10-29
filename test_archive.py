@@ -300,8 +300,9 @@ class SingleDiskTest(Base):
     def test_thumbnails_during_import_and_embedded_preview(self):
         """Les vignettes des vraies photos sont faites pendant l'import (sans relire le disque) ;
         l'aperçu intégré d'un téléphone est pris tel quel, tourné selon l'orientation EXIF."""
-        import souvenirs
         import vignettes
+        if not vignettes.available():
+            self.skipTest("Pillow absent")
         from PIL import Image
         src = os.path.join(self.tmp, "telephone")
         write(os.path.join(src, "DCIM", "IMG_20150704_101010.jpg"), jpeg(1600, 1200, preview=(480, 360), orientation=6))
