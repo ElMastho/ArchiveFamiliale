@@ -2,15 +2,17 @@
 
 Sur chaque disque de l'archive (et de chaque jeu de sauvegarde) branché, le programme écrit :
 - _catalogue/souvenirs/ : une petite page web (index.html, app.js, style.css), la liste des
-  fichiers de CE disque (donnees.js) et des vignettes des photos (v/xx/<empreinte>.jpg) ;
+  fichiers de CE disque (donnees.js, avec les documents qui semblent importants : importants.py)
+  et des vignettes des photos (v/xx/<empreinte>.jpg) ;
 - « ▶ Nos souvenirs.html » à la racine, qui ouvre cette page d'un double-clic.
 
 La page fonctionne sans Internet ni installation, dans n'importe quel navigateur (Windows, Mac) :
 elle lit les fichiers du disque par des liens relatifs. Elle ne modifie jamais rien.
 
-Les vignettes demandent la bibliothèque Pillow (facultative) : sans elle, la page fonctionne, les
-photos s'affichent simplement en taille réelle, plus lentement. Elles sont gardées en cache sur
-ARCHIVE-1 (_catalogue/vignettes) pour ne pas relire deux fois les mêmes photos d'un disque à l'autre.
+Les vignettes (vignettes.py) demandent la bibliothèque Pillow (facultative) : sans elle, la page
+fonctionne, les photos s'affichent simplement en taille réelle, plus lentement. Celles d'ARCHIVE-1
+servent de réserve : les autres disques en reçoivent une copie, sans relire les photos. La plupart
+sont faites pendant l'import, à partir des photos déjà en mémoire.
 """
 from __future__ import annotations
 
@@ -20,16 +22,17 @@ import os
 import shutil
 import sys
 
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+
 import archive as core
 import bilan
 import classement
+import importants
+import vignettes
 
 SITE_DIR = "souvenirs"
-CACHE_DIR = "vignettes"
 LAUNCHER = "▶ Nos souvenirs.html"
 DEFAULT_TITLE = "Nos souvenirs"
-THUMB_SIZE = 360
-THUMB_EXT = {"jpg", "jpeg", "jpe", "jfif", "png", "gif", "bmp", "tif", "tiff", "webp"}
 ASSETS = ("index.html", "app.js", "style.css")
 
 
@@ -69,29 +72,6 @@ def _when(path, h, content, mtimes):
 def _album(path):
     """Nom d'album : le dossier d'origine (« Vacances Bretagne »), sans les dates."""
     return classement.event_for(path.split("/")) or ""   # 1er élément : disque d'origine ou famille
-
-
-def _thumb(src, cache_path):
-    """Fabrique la vignette (JPEG) d'une photo ; False si impossible (format, fichier abîmé…)."""
-    try:
-        from PIL import Image, ImageOps
-    except ImportError:
-        return False
-    try:
-        with Image.open(core.lp(src)) as im:
-            im.draft("RGB", (THUMB_SIZE * 2, THUMB_SIZE * 2))   # JPEG : décodage réduit, bien plus rapide
-            im = ImageOps.exif_transpose(im)
-            im.thumbnail((THUMB_SIZE, THUMB_SIZE))
-            if im.mode not in ("RGB", "L"):
-                im = im.convert("RGB")
-            os.makedirs(os.path.dirname(cache_path), exist_ok=True)
-            tmp = cache_path + ".partial"
-            im.save(core.lp(tmp), "JPEG", quality=78, optimize=True)
-            os.replace(core.lp(tmp), core.lp(cache_path))
-            return True
-    except Exception as e:   # format non reconnu, image abîmée… : la page affichera une icône
-        core.log.info("Vignette impossible pour %s : %s", src, e)
-        return False
 
 
 def _targets(ar):
@@ -145,61 +125,156 @@ def write_launchers(root):
     return written
 
 
+def _cache(ar) -> str:
+    """Dossier des vignettes sur ARCHIVE-1 : celui de sa page, pour ne pas les avoir en double.
+    Celles de la version 2.6 (_catalogue/vignettes) y sont déplacées."""
+    cache = os.path.join(ar.cat_dir, *vignettes.CACHE_PARTS)
+    old = os.path.join(ar.cat_dir, "vignettes")
+    if os.path.isdir(core.lp(old)):
+        for d in os.scandir(core.lp(old)):
+            if d.is_dir():
+                os.makedirs(core.lp(os.path.join(cache, d.name)), exist_ok=True)
+                for f in os.scandir(d.path):
+                    try:
+                        os.replace(f.path, core.lp(os.path.join(cache, d.name, f.name)))
+                    except OSError:
+                        pass
+        shutil.rmtree(core.lp(old), ignore_errors=True)
+    return cache
+
+
+def _existing(folder) -> set:
+    """Empreintes des vignettes présentes dans un dossier v/."""
+    out = set()
+    try:
+        for d in os.scandir(core.lp(folder)):
+            if d.is_dir():
+                out.update(f.name[:-4] for f in os.scandir(d.path) if f.name.endswith(".jpg"))
+    except OSError:
+        pass
+    return out
+
+
+def _write_site(site, data, meta, have, primary, vcache):
+    """Écrit la page d'un disque. Les vignettes disponibles (have) sont copiées sur ce disque s'il
+    n'est pas ARCHIVE-1 (dont la page lit directement la réserve)."""
+    os.makedirs(core.lp(site), exist_ok=True)
+    present = have if primary else _existing(os.path.join(site, "v"))
+    files = []
+    for path, fam, y, m, album, size, h, imp in meta:
+        thumb = ""
+        if h in have and vignettes.wanted(path):
+            if h not in present:
+                core.check_cancel()
+                dst = os.path.join(site, "v", h[:2], h + ".jpg")
+                os.makedirs(core.lp(os.path.dirname(dst)), exist_ok=True)
+                shutil.copyfile(core.lp(os.path.join(vcache, h[:2], h + ".jpg")), core.lp(dst))
+                present.add(h)
+            thumb = h
+        files.append([path, fam, y, m, album, size, thumb, imp])
+    tmp = os.path.join(site, "donnees.js.partial")
+    with open(core.lp(tmp), "w", encoding="utf-8") as f:
+        f.write("window.SOUVENIRS = ")
+        json.dump(dict(data, files=files), f, ensure_ascii=False, separators=(",", ":"))
+        f.write(";\n")
+    os.replace(core.lp(tmp), core.lp(os.path.join(site, "donnees.js")))
+    for name in ASSETS:
+        shutil.copyfile(os.path.join(assets_dir(), name), core.lp(os.path.join(site, name)))
+
+
+def _make_thumbs(todo: dict, vcache: str, have: set) -> int:
+    """Fait les vignettes manquantes (empreinte -> (photo, taille)), plusieurs à la fois."""
+    progress = core.Progress(len(todo), sum(size for _, size in todo.values()))
+    n = vignettes.workers()
+    items = iter(todo.items())
+    pending = {}
+    made = 0
+    try:
+        with ThreadPoolExecutor(n, thread_name_prefix="vignette") as ex:
+            try:
+                while True:
+                    while len(pending) < n * 2:
+                        nxt = next(items, None)
+                        if nxt is None:
+                            break
+                        h, (src, size) = nxt
+                        dst = core.lp(os.path.join(vcache, h[:2], h + ".jpg"))
+                        pending[ex.submit(vignettes.make_from_file, core.lp(src), dst)] = (h, size)
+                    if not pending:
+                        break
+                    done, _ = wait(pending, timeout=0.5, return_when=FIRST_COMPLETED)
+                    for fut in done:
+                        h, size = pending.pop(fut)
+                        if fut.result():
+                            have.add(h)
+                            made += 1
+                        progress.file_done(size)
+                    core.check_cancel()
+            except KeyboardInterrupt:
+                for fut in pending:
+                    fut.cancel()
+                raise
+    finally:
+        progress.finish()
+    return made
+
+
 def generate(ar, title=None) -> dict:
-    """Écrit (ou met à jour) la page sur chaque disque branché. Renvoie un petit bilan."""
+    """Écrit (ou met à jour) la page sur chaque disque branché. Renvoie un petit bilan.
+
+    1. La page est écrite tout de suite sur chaque disque, avec les vignettes déjà faites (pendant
+       l'import, ou une fois précédente) : elle est utilisable immédiatement ;
+    2. les vignettes manquantes sont faites, plusieurs à la fois (vignettes.py) ;
+    3. la page est réécrite pour les montrer. Interrompre pendant 2 ne perd rien."""
     title = title or ar.meta("souvenirs_titre") or DEFAULT_TITLE
     content, mtimes = _dates(ar.db)
     names = {v["id"]: v["name"] for v in ar.all_volumes()}
+    main_ids = {v["id"] for v in ar.volumes(core.MAIN_SET)}
     totals = {v["id"]: 0 for v in ar.all_volumes()}
     for vid, n in ar.db.execute("SELECT volume, COUNT(*) FROM stored GROUP BY volume"):
         totals[vid] = n
-    targets = _targets(ar)
-    cache = os.path.join(ar.cat_dir, CACHE_DIR)
-    photos = [size for _, _, rows in targets for p, _, size in rows if classement.ext_of(p) in THUMB_EXT]
-    progress = core.Progress(len(photos), sum(photos))
-    made = 0
-    summary = {"disks": [], "thumbs": 0}
-    for vid, root, rows in targets:
-        site = os.path.join(root, core.CATALOG_DIR, SITE_DIR)
-        os.makedirs(core.lp(site), exist_ok=True)
-        files = []
+    vcache = _cache(ar)
+    have = _existing(vcache)
+    sites = []   # (dossier de la page, données communes, fichiers, est ARCHIVE-1, racine)
+    for vid, root, rows in _targets(ar):
+        meta = []
         for path, h, size in sorted(rows):
             fam = bilan.family(path)
             if fam == "other" and classement.category(path)[0] == "sidecar":
                 continue   # fichiers techniques d'appareil photo : rien à regarder
             y, m = _when(path, h, content, mtimes)
-            thumb = ""   # empreinte si la vignette existe (v/xx/<empreinte>.jpg)
-            if classement.ext_of(path) in THUMB_EXT:
-                core.check_cancel()
-                rel = f"v/{h[:2]}/{h}.jpg"
-                dst = os.path.join(site, rel.replace("/", os.sep))
-                if os.path.exists(core.lp(dst)):
-                    thumb = h
-                else:
-                    cached = os.path.join(cache, h[:2], h + ".jpg")
-                    if not os.path.exists(core.lp(cached)):
-                        made += _thumb(os.path.join(root, core.to_os(path)), cached)
-                    if os.path.exists(core.lp(cached)):
-                        os.makedirs(core.lp(os.path.dirname(dst)), exist_ok=True)
-                        shutil.copyfile(core.lp(cached), core.lp(dst))
-                        thumb = h
-                progress.file_done(size)
-            files.append([path, fam, y, m, _album(path), size, thumb])
+            meta.append((path, fam, y, m, _album(path), size, h, importants.category(path, fam) or ""))
         others = [{"name": names.get(o, o), "files": n} for o, n in totals.items()
-                  if o != vid and n and o in {v["id"] for v in ar.volumes(core.MAIN_SET)}]
+                  if o != vid and n and o in main_ids]
         data = {"title": title, "disk": names.get(vid, vid), "generated": core.now_iso(),
-                "families": {k: label for k, label, _ in bilan.FAMILIES}, "others": others, "files": files}
-        with open(core.lp(os.path.join(site, "donnees.js")), "w", encoding="utf-8") as f:
-            f.write("window.SOUVENIRS = ")
-            json.dump(data, f, ensure_ascii=False, separators=(",", ":"))
-            f.write(";\n")
-        for name in ASSETS:
-            shutil.copyfile(os.path.join(assets_dir(), name), core.lp(os.path.join(site, name)))
-        write_launchers(root)
-        summary["disks"].append((names.get(vid, vid), len(files)))
-    progress.finish()
-    summary["thumbs"] = made
-    return summary
+                "families": {k: label for k, label, _ in bilan.FAMILIES},
+                "important": {k: [label, icon] for k, label, icon, _ in importants.CATEGORIES},
+                "others": others}
+        sites.append((os.path.join(root, core.CATALOG_DIR, SITE_DIR), data, meta,
+                      core.same_path(root, ar.root), root))
+
+    def write_all():
+        for site, data, meta, primary, root in sites:
+            _write_site(site, data, meta, have, primary, vcache)
+            write_launchers(root)
+
+    write_all()
+    todo = {}   # chaque photo une seule fois, lue sur le premier disque qui l'a
+    for _, _, meta, _, root in sites:
+        for path, _, _, _, _, size, h, _ in meta:
+            if h not in have and h not in todo and vignettes.wanted(path):
+                todo[h] = (os.path.join(root, core.to_os(path)), size)
+    made = 0
+    if todo and vignettes.available():
+        try:
+            made = _make_thumbs(todo, vcache, have)
+        except KeyboardInterrupt:   # mise en pause : ARCHIVE-1 montre déjà les vignettes faites
+            for site, data, meta, primary, _ in sites:
+                if primary:
+                    _write_site(site, data, meta, have, primary, vcache)
+            raise
+        write_all()
+    return {"disks": [(d["disk"], len(meta)) for _, d, meta, _, _ in sites], "thumbs": made}
 
 
 def cmd_souvenirs(args) -> int:
@@ -212,7 +287,8 @@ def cmd_souvenirs(args) -> int:
         try:
             s = generate(ar)
         except KeyboardInterrupt:
-            print("\nInterrompu : relancez pour terminer (les vignettes déjà faites sont gardées).")
+            print("\nInterrompu : la page est déjà utilisable ; relancez pour finir les vignettes "
+                  "(celles déjà faites sont gardées).")
             return 130
         if not s["disks"]:
             print("Aucun disque de l'archive n'est branché.")

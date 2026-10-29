@@ -2,6 +2,34 @@
 
 Les notes de chaque version publiée sur GitHub sont reprises de ce fichier.
 
+## [2.7.0] - 2026-10-29
+
+### Documents importants
+- Le programme repère les papiers qui comptent : identité et état civil, travail et salaires, diplômes,
+  impôts, santé, véhicules, logement, banque et assurances, famille et succession, factures. D'après un
+  dictionnaire de mots appliqué au nom et aux dossiers de chaque fichier ; volontairement large.
+- Bilan (étape 7 et commande `bilan`) : nombre de documents importants par catégorie.
+- « Nos souvenirs » : nouvelle rubrique « Papiers importants », rangée par catégorie.
+
+### Regrouper l'archive sur un plus grand disque
+- Étape 1, « Regrouper sur un plus grand disque… » (commande `regrouper`) : toute l'archive est copiée
+  sur un seul disque, chaque copie est relue, puis ce disque devient ARCHIVE-1. Les anciens disques
+  sont libérés et peuvent être formatés. Pause et reprise possibles ; un fichier abîmé est signalé et
+  bloque la fin jusqu'à ce qu'il soit réparé.
+
+### Import plus rapide avec beaucoup de petits fichiers
+- Lecture d'avance des fichiers suivants, mise en sûreté de plusieurs fichiers à la fois, catalogue
+  enregistré moins souvent : environ 25 % de temps en moins sur des disques USB pour des photos.
+- Un fichier laissé par une coupure de courant est remplacé, au lieu d'une copie « (2) ».
+- Le journal indique, à la fin de chaque disque, ce qui a freiné (lecture, écriture ou catalogue).
+
+### « Nos souvenirs » prêt sans attendre
+- Les vignettes des photos sont faites pendant l'import, à partir des photos déjà lues, sur les cœurs
+  libres du processeur.
+- L'aperçu déjà rangé dans les photos de téléphone est utilisé tel quel quand il est assez grand.
+- La page est utilisable tout de suite ; les vignettes qui manquent sont faites ensuite, plusieurs à la
+  fois, et une pause n'en perd aucune.
+
 ## [2.6.0] - 2026-10-29
 
 ### « Nos souvenirs » : consulter l'archive sans le logiciel

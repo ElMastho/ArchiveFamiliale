@@ -1,8 +1,9 @@
 """Bilan : « qu'y avait-il dans tous ces disques ? »
 
 Compte les fichiers par grande famille (photos, vidéos, musique, textes, tableurs, présentations,
-PDF, e-mails), donne la période couverte par chacune et la répartition par année, et mesure ce que
-les doublons ont fait gagner.
+PDF, e-mails), donne la période couverte par chacune et la répartition par année, mesure ce que
+les doublons ont fait gagner, et compte les documents qui semblent importants (importants.py :
+papiers d'identité, fiches de paie, diplômes, impôts…).
 
 Deux usages :
 - sur l'archive (catalogue) : tout ce qui a été vu sur les anciens disques ;
@@ -18,6 +19,7 @@ import datetime as dt
 from collections import Counter
 
 import classement
+import importants
 
 # Familles affichées, dans l'ordre : (clé, libellé au pluriel, libellé au singulier)
 FAMILIES = [
@@ -68,6 +70,9 @@ class Summary:
         self.bytes = Counter()
         self.years: dict[str, Counter] = {k: Counter() for k, _, _ in FAMILIES}
         self.seen_n = self.seen_b = 0   # tout ce qui a été vu, doublons compris
+        self.imp_count = Counter()      # documents importants, par catégorie (importants.CATEGORIES)
+        self.imp_bytes = Counter()
+        self.imp_years = Counter()
 
     def add(self, name: str, size: int, mtime_ns=None, content_year=None):
         f = family(name)
@@ -76,6 +81,12 @@ class Summary:
         y = year_of(name, mtime_ns, content_year)
         if y:
             self.years[f][y] += 1
+        imp = importants.category(name, f)
+        if imp:
+            self.imp_count[imp] += 1
+            self.imp_bytes[imp] += size
+            if y:
+                self.imp_years[y] += 1
 
     @property
     def unique_n(self):
@@ -98,6 +109,14 @@ class Summary:
         return [(k, plural, self.count[k], self.bytes[k], self.period(k))
                 for k, plural, _ in FAMILIES if self.count[k]]
 
+    def important_rows(self):
+        """[(clé, libellé, nombre, octets)] des documents importants, par catégorie."""
+        return [(k, label, self.imp_count[k], self.imp_bytes[k])
+                for k, label, _, _ in importants.CATEGORIES if self.imp_count[k]]
+
+    def important_period(self):
+        return (min(self.imp_years), max(self.imp_years)) if self.imp_years else None
+
     def highlights(self, fmt_int, fmt_size) -> list[str]:
         """Quelques phrases simples qui résument le tout."""
         out = []
@@ -116,6 +135,12 @@ class Summary:
         if docs:
             ys = sum((self.years[k] for k in ("Textes", "Tableurs", "Présentations", "PDF")), Counter())
             out.append(f"{fmt_int(docs)} documents" + (f", de {min(ys)} à {max(ys)}." if ys else "."))
+        imp = sum(self.imp_count.values())
+        if imp:
+            top = ", ".join(f"{fmt_int(n)} « {label.lower()} »"
+                            for _, label, n, _ in sorted(self.important_rows(), key=lambda r: -r[2])[:3])
+            out.append(f"{fmt_int(imp)} documents semblent importants (identité, fiches de paie, diplômes, "
+                       f"impôts…) : {top}.")
         return out
 
     def text(self, fmt_int, fmt_size) -> str:
@@ -123,6 +148,10 @@ class Summary:
         for _, label, n, b, per in self.rows():
             when = f", {per[0]}–{per[1]}" if per and per[0] != per[1] else (f", {per[0]}" if per else "")
             lines.append(f"  {fmt_int(n):>10}  {label} ({fmt_size(b)}{when})")
+        if self.imp_count:
+            lines += ["", "Documents qui semblent importants :"]
+            for _, label, n, b in self.important_rows():
+                lines.append(f"  {fmt_int(n):>10}  {label} ({fmt_size(b)})")
         return "\n".join(lines)
 
 

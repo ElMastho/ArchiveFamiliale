@@ -34,9 +34,9 @@ button, input { font: inherit; }
   background: var(--warm); color: #fff; font-size: 22px;
 }
 #title { font-size: 1.5rem; font-weight: 650; letter-spacing: -.01em; }
-#nav { display: flex; gap: 6px; flex-wrap: wrap; flex: 1; }
+#nav { display: flex; gap: 2px; flex-wrap: wrap; flex: 1; }
 #nav a {
-  padding: 9px 18px; border-radius: 999px; text-decoration: none; color: var(--text); font-weight: 550;
+  padding: 9px 14px; border-radius: 999px; text-decoration: none; color: var(--text); font-weight: 550;
 }
 #nav a:hover { background: #ece6dc; }
 #nav a.on { background: var(--text); color: #fff; }

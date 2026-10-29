@@ -70,6 +70,10 @@ voir son détail et ses boutons.
    « Ajouter un disque à l'archive… » : il devient ARCHIVE-2, et ainsi de suite.
    Le plus simple : laisser tous les disques de l'archive branchés pendant les imports
    (un hub USB alimenté aide beaucoup).
+   Plus tard, avec un disque plus grand : « Regrouper sur un plus grand disque… » copie toute
+   l'archive (ARCHIVE-1, ARCHIVE-2…) sur ce disque, relit chaque copie, puis en fait le nouvel
+   ARCHIVE-1. Les anciens disques sont alors libérés : vous pouvez les formater. Le regroupement
+   peut être mis en pause et repris ; les anciens disques ne sont jamais modifiés pendant la copie.
 
 2. Importer les anciens disques — un ou plusieurs à la fois
    • Branchez un ou plusieurs anciens disques (un hub USB alimenté aide beaucoup).
@@ -127,8 +131,12 @@ voir son détail et ses boutons.
    place prenaient les doublons, avec une frise des photos et vidéos année par année. Il
    s'affiche tout seul à la fin d'un import. L'estimation rapide (étape 2) donne le même
    aperçu pour des disques simplement branchés, sans rien copier.
+   « ★ Documents importants » : papiers d'identité, fiches de paie, diplômes, impôts,
+   logement, santé… repérés d'après leur nom et leur dossier. Il peut y avoir des intrus :
+   mieux vaut un document de trop qu'un papier important oublié.
    « Nos souvenirs » : sur chaque disque, un fichier « ▶ Nos souvenirs.html » ouvre l'archive
-   dans le navigateur (photos par année, diaporama, documents, musique, recherche), pour la
+   dans le navigateur (photos par année, diaporama, papiers importants, documents, musique,
+   recherche), pour la
    famille qui recevra le disque. Mis à jour à la fin de chaque import, ou avec le bouton
    « Créer « Nos souvenirs » sur les disques ».
 
@@ -305,7 +313,7 @@ def short_date(iso) -> str:
 # --------------------------------------------------------------------------- #
 
 class DriveDialog(tk.Toplevel):
-    """mode : 'create' | 'addvol' | 'backup' | 'source' | 'scan' | 'check'"""
+    """mode : 'create' | 'addvol' | 'backup' | 'regroup' | 'source' | 'scan' | 'check'"""
 
     def __init__(self, app: "App", mode: str, title: str, intro: str):
         super().__init__(app)
@@ -1138,7 +1146,8 @@ class App(tk.Tk):
                         "il doit être branché à chaque fois.",
                         [("Créer l'archive…", self.create_archive, True, True),
                          ("Ajouter un disque à l'archive…", self.add_main_disk, True, False),
-                         ("Ouvrir une archive existante…", self.open_archive, False, True)])
+                         ("Ouvrir une archive existante…", self.open_archive, False, True),
+                         ("Regrouper sur un plus grand disque…", self.regroup, False, False)])
         self.tree_vol = self._tree(s1, [("disque", "Disque", 130), ("branche", "Branché ?", 170),
                                         ("fichiers", "Fichiers", 90), ("donnees", "Données", 100),
                                         ("libre", "Libre", 100), ("verif", "Vérification", 200)], 3)
@@ -1351,6 +1360,15 @@ class App(tk.Tk):
         for _, label, n, b, per in s.rows():
             when = "—" if not per else (f"{per[0]} – {per[1]}" if per[0] != per[1] else str(per[0]))
             self._insert(t, (label[0].upper() + label[1:], core.fmt_int(n), core.fmt_size(b), when))
+        imp = s.important_rows()
+        if imp:   # en plus des familles : les papiers qui comptent (identité, paie, diplômes…)
+            per = s.important_period()
+            when = "—" if not per else (f"{per[0]} – {per[1]}" if per[0] != per[1] else str(per[0]))
+            self._insert(t, ("★ Documents importants", core.fmt_int(sum(r[2] for r in imp)),
+                             core.fmt_size(sum(r[3] for r in imp)), when))
+            for _, label, n, b in imp:
+                self._insert(t, (f"      {label}", core.fmt_int(n), core.fmt_size(b), ""))
+        t.configure(height=max(9, min(len(t.get_children()), 16)))   # au-delà : la molette fait défiler
         self._draw_chart()
         self._update_steps()
 
@@ -1710,6 +1728,12 @@ class App(tk.Tk):
                            "Vous pouvez laisser l'ordinateur travailler seul"
                            + (f" : encore {left} disque(s) après celui-ci." if left > 0 else ".")
                            + " Pour l'interrompre sans rien perdre : « Mettre en pause », en bas.")
+        elif st["meta"].get("regroup_target"):
+            n = 1
+            self._set_hero("warn", "REGROUPEMENT EN PAUSE", "Regroupement de l'archive à reprendre",
+                           "La copie de l'archive sur le nouveau disque n'est pas finie. Branchez tous les disques "
+                           "de l'archive et le nouveau disque, puis reprenez : rien n'est refait.",
+                           self.regroup, "Reprendre le regroupement")
         elif iq:
             n = 1 if iq["paused"] == "plein" and low else 2
             names = ", ".join(it["label"] for it in iq["items"][:4]) + ("…" if len(iq["items"]) > 4 else "")
@@ -2024,6 +2048,68 @@ class App(tk.Tk):
         self.run_jobs([("Ajout d'un disque à l'archive", ["ajouter-disque", path, *self._m(), *extra])], done)
 
     # ---------- actions : sources ----------
+    # ---------- regrouper l'archive sur un seul disque, plus grand ----------
+    def regroup(self):
+        st = self.st
+        if not st:
+            return
+        if st["meta"].get("regroup_target"):
+            target = core.find_regroup_target(st["meta"]["regroup_target"], st["meta"].get("archive_id"))
+            if not target:
+                messagebox.showinfo(APP_TITLE, "Un regroupement est en cours, mais son nouveau disque n'est pas "
+                                    f"branché (il était en {st['meta']['regroup_target']}).\n\nBranchez-le, puis "
+                                    "cliquez à nouveau sur « Reprendre le regroupement ».")
+                return
+            if messagebox.askyesno(APP_TITLE, f"Reprendre le regroupement de l'archive sur {target} ?\n\n"
+                                   "Ce qui est déjà copié et vérifié n'est pas refait."):
+                self._run_regroup(target)
+            return
+        vols = st["main_vols"]
+        need = st["stored_b"]
+        names = ", ".join(v["name"] for v in vols)
+        dlg = DriveDialog(self, "regroup", "Regrouper l'archive sur un plus grand disque",
+                          f"Vos {len(vols)} disques d'archive ({names}, {core.fmt_size(need)} en tout) vont être "
+                          "copiés sur UN seul disque, plus grand. Branchez ce disque neuf (ou vide) et "
+                          "sélectionnez-le. Il faut au moins " + core.fmt_size(need + 10 * 1024 ** 3) + " libres.")
+        self.wait_window(dlg)
+        if not dlg.result:
+            return
+        path = dlg.result["path"]
+        d = dlg.result.get("drive")
+        if d and d.free < need + core.FREE_SPACE_MARGIN + core.PRIMARY_EXTRA_MARGIN:
+            messagebox.showerror(APP_TITLE, f"Ce disque est trop petit : {core.fmt_size(d.free)} libres, il faut "
+                                 f"au moins {core.fmt_size(need + core.FREE_SPACE_MARGIN + core.PRIMARY_EXTRA_MARGIN)}.")
+            return
+        unplugged = [v["name"] for v in vols if not v["path"]]
+        hours = max(1, round(2 * need / (120 * 1024 ** 2) / 3600))   # copie puis relecture, ~120 Mo/s
+        if not messagebox.askyesno(
+                APP_TITLE, f"Regrouper toute l'archive sur {path} ?\n\n"
+                "1. Chaque fichier est copié sur le nouveau disque,\n"
+                "2. puis relu et comparé à son empreinte,\n"
+                "3. et seulement quand TOUT est vérifié, le nouveau disque devient « ARCHIVE-1 ».\n\n"
+                f"Comptez environ {hours} heure(s). Vous pouvez mettre en pause et reprendre plus tard. Les anciens "
+                "disques ne sont jamais modifiés pendant la copie ; à la fin, ils sont simplement « libérés » : "
+                "vous pourrez les formater."
+                + (f"\n\nNon branchés pour l'instant : {', '.join(unplugged)}. Branchez-les avant, ou après : "
+                   "le regroupement les attendra." if unplugged else "")):
+            return
+        self._run_regroup(path)
+
+    def _run_regroup(self, path):
+        def done(_):
+            r = dict(core.LAST_REGROUP)
+            if not r:
+                return
+            self.set_master(r["master"])
+            freed = "\n".join(f"  • {name}  ({where})" for name, where in r["freed"])
+            messagebox.showinfo(APP_TITLE, f"Regroupement terminé : toute l'archive est maintenant sur {r['master']}, "
+                                "qui devient « ARCHIVE-1 ». Collez-lui cette étiquette.\n\n"
+                                f"Ces anciens disques ne font plus partie de l'archive :\n{freed}\n\n"
+                                "Vous pouvez les formater pour vous en resservir : dans l'Explorateur, clic droit "
+                                "sur le disque → « Formater… ». Les sauvegardes, elles, ne changent pas.")
+            self.run_jobs([("Mise à jour de « Nos souvenirs »", ["souvenirs", *self._m()])])
+        self.run_jobs([("Regroupement de l'archive", ["regrouper", path, *self._m()])], done)
+
     def add_source(self, copy: bool):
         intro = ("Branchez les anciens disques (autant que vous voulez), cochez-les, puis lancez : ils seront "
                  "traités l'un après l'autre, sans que vous ayez besoin d'être là. Ils sont seulement LUS : "

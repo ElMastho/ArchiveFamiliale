@@ -26,6 +26,29 @@ def write(path, data):
         f.write(data)
 
 
+def jpeg(w, h, color=(200, 120, 40), preview=None, orientation=1):
+    """Vraie photo JPEG ; preview=(l, h) y range un aperçu intégré (EXIF, IFD1), comme les téléphones."""
+    import struct
+    from PIL import Image
+    buf = io.BytesIO()
+    Image.new("RGB", (w, h), color).save(buf, "JPEG")
+    data = buf.getvalue()
+    if not preview:
+        return data
+    pb = io.BytesIO()
+    Image.new("RGB", preview, (10, 200, 10)).save(pb, "JPEG")
+    thumb = pb.getvalue()
+    # TIFF : IFD0 (orientation) puis IFD1 (aperçu JPEG)
+    ifd0 = struct.pack("<H", 1) + struct.pack("<HHIHH", 0x0112, 3, 1, orientation, 0)
+    ifd1_off = 8 + len(ifd0) + 4
+    ifd1 = struct.pack("<H", 2)
+    thumb_off = ifd1_off + 2 + 24 + 4
+    ifd1 += struct.pack("<HHII", 0x0201, 4, 1, thumb_off) + struct.pack("<HHII", 0x0202, 4, 1, len(thumb))
+    tiff = b"II*\0" + struct.pack("<I", 8) + ifd0 + struct.pack("<I", ifd1_off) + ifd1 + struct.pack("<I", 0) + thumb
+    app1 = b"Exif\0\0" + tiff
+    return data[:2] + b"\xff\xe1" + struct.pack(">H", len(app1) + 2) + app1 + data[2:]
+
+
 def run(*argv):
     out = io.StringIO()
     with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
@@ -265,14 +288,92 @@ class SingleDiskTest(Base):
         for f in ("index.html", "app.js", "style.css", "donnees.js"):
             self.assertTrue(os.path.exists(os.path.join(site, f)), f)
         self.assertTrue(os.path.exists(os.path.join(self.master, souvenirs.LAUNCHER)))
-        text = open(os.path.join(site, "donnees.js"), encoding="utf-8").read()
-        data = json.loads(text[len("window.SOUVENIRS = "):].rstrip().rstrip(";"))
+        with open(os.path.join(site, "donnees.js"), encoding="utf-8") as f:
+            data = json.loads(f.read()[len("window.SOUVENIRS = "):].rstrip().rstrip(";"))
         self.assertEqual(data["title"], "Les souvenirs des Martin")
         paths = {f[0] for f in data["files"]}
         self.assertIn("Disque1/Photos/2009/IMG_001.JPG", paths)
         photo = next(f for f in data["files"] if f[0].endswith("IMG_001.JPG"))
         self.assertEqual(photo[1], "photo")
         self.assertEqual(photo[6], "")   # contenu factice : pas de vignette, mais la page reste utilisable
+
+    def test_thumbnails_during_import_and_embedded_preview(self):
+        """Les vignettes des vraies photos sont faites pendant l'import (sans relire le disque) ;
+        l'aperçu intégré d'un téléphone est pris tel quel, tourné selon l'orientation EXIF."""
+        import souvenirs
+        import vignettes
+        from PIL import Image
+        src = os.path.join(self.tmp, "telephone")
+        write(os.path.join(src, "DCIM", "IMG_20150704_101010.jpg"), jpeg(1600, 1200, preview=(480, 360), orientation=6))
+        write(os.path.join(src, "DCIM", "IMG_20150705_101010.jpg"), jpeg(1200, 900, (30, 60, 200)))
+        write(os.path.join(src, "DCIM", "abimee.jpg"), b"\xff\xd8pas une image")
+        data, orient = vignettes.embedded_preview(jpeg(1600, 1200, preview=(480, 360), orientation=6))
+        self.assertEqual(orient, 6)
+        self.assertEqual(data[:2], b"\xff\xd8")
+        rc, out = run("importer", src, "-m", self.master, "-l", "Tel")
+        self.assertEqual(rc, 0, out)
+        con = self.db()
+        hashes = {r["path"].rsplit("/", 1)[-1]: r["hash"] for r in con.execute("SELECT path, hash FROM stored")}
+        con.close()
+        cache = os.path.join(self.master, "_catalogue", "souvenirs", "v")
+
+        def thumb(name):
+            h = hashes[name]
+            return os.path.join(cache, h[:2], h + ".jpg")
+        self.assertTrue(os.path.exists(thumb("IMG_20150704_101010.jpg")))
+        self.assertTrue(os.path.exists(thumb("IMG_20150705_101010.jpg")))
+        self.assertFalse(os.path.exists(thumb("abimee.jpg")))
+        with Image.open(thumb("IMG_20150704_101010.jpg")) as im:
+            self.assertEqual(im.size, (270, 360))           # aperçu 480x360 tourné d'un quart de tour
+            self.assertGreater(im.getpixel((100, 100))[1], 150)   # vert : c'est bien l'aperçu intégré
+        with Image.open(thumb("IMG_20150705_101010.jpg")) as im:
+            self.assertEqual(max(im.size), 360)
+        # La page reprend les vignettes déjà faites ; aucune n'est refaite
+        os.remove(thumb("IMG_20150705_101010.jpg"))
+        rc, out = run("souvenirs", "-m", self.master)
+        self.assertEqual(rc, 0, out)
+        self.assertIn("1 vignettes de photos fabriquées", out)
+        with open(os.path.join(self.master, "_catalogue", "souvenirs", "donnees.js"), encoding="utf-8") as f:
+            files = json.loads(f.read()[len("window.SOUVENIRS = "):].rstrip().rstrip(";"))["files"]
+        self.assertEqual(sum(1 for f in files if f[6]), 2)
+
+    def test_important_documents(self):
+        import bilan
+        import importants
+        cases = {
+            "D/Papiers/Impôts/2012/avis.pdf": "impots",
+            "D/Mes documents/CNI Jean.jpg": "identite",
+            "D/Fiche_de_Paye-Février 2015.PDF": "travail",
+            "D/Documents/Diplôme BTS.pdf": "diplomes",
+            "D/Administratif/scan0001.pdf": "papiers",
+            "D/Vacances Cap Ferret/IMG_001.jpg": None,
+            "D/Photos/2009/IMG_1.JPG": None,
+            "D/Musique/Banque.mp3": None,                 # ni la musique ni les vidéos
+            "D/Users/Paul/Documents/lettre.docx": None,
+        }
+        for path, want in cases.items():
+            self.assertEqual(importants.category(path, bilan.family(path)), want, path)
+        write(os.path.join(self.src1, "Papiers", "Bulletin de salaire mars 2015.pdf"), b"paie")
+        write(os.path.join(self.src1, "Papiers", "passeport.jpg"), b"passeport")
+        run("importer", self.src1, "-m", self.master, "-l", "Disque1")
+        rc, out = run("bilan", "-m", self.master)
+        self.assertEqual(rc, 0, out)
+        self.assertIn("2 documents semblent importants", out)
+        self.assertIn("Identité et état civil", out)
+        run("souvenirs", "-m", self.master)
+        with open(os.path.join(self.master, "_catalogue", "souvenirs", "donnees.js"), encoding="utf-8") as f:
+            data = json.loads(f.read()[len("window.SOUVENIRS = "):].rstrip().rstrip(";"))
+        imp = {f[0].rsplit("/", 1)[-1]: f[7] for f in data["files"] if f[7]}
+        self.assertEqual(imp, {"Bulletin de salaire mars 2015.pdf": "travail", "passeport.jpg": "identite"})
+        self.assertIn("identite", data["important"])
+
+    def test_leftover_file_from_power_cut_is_replaced(self):
+        """Un fichier écrit mais pas encore inscrit au catalogue (coupure) est remplacé, pas doublé en « (2) »."""
+        write(os.path.join(self.master, "Disque1", "Photos", "2009", "IMG_001.JPG"), b"photo-1" * 1000)
+        rc, out = run("importer", self.src1, "-m", self.master, "-l", "Disque1")
+        self.assertEqual(rc, 0, out)
+        self.assertFalse(os.path.exists(os.path.join(self.master, "Disque1", "Photos", "2009", "IMG_001 (2).JPG")))
+        self.assertEqual(run("verifier", "-m", self.master)[0], 0)
 
     def test_check_source(self):
         run("importer", self.src1, "-m", self.master, "-l", "Disque1")
@@ -590,6 +691,57 @@ class MultiDiskTest(Base):
         self.assertEqual(rc, 0, out)
         self.assertEqual(self.per_volume(), {"ARCHIVE-1": 2, "ARCHIVE-2": 2, "ARCHIVE-3": 4})
 
+    def test_regroup_onto_bigger_disk(self):
+        """Deux disques d'archive regroupés sur un plus grand : copie, relecture, puis le nouveau disque
+        devient ARCHIVE-1 et les anciens sont libérés. Un fichier abîmé bloque la fin, sans rien perdre."""
+        self.cap(self.master, 45 * KB)
+        v2 = self.add_disk("vol2", 100 * KB)
+        for i, s in enumerate(self.srcs[:2]):
+            self.assertEqual(run("importer", s, "-m", self.master, "-l", f"S{i}")[0], 0)
+        self.add_disk("bk1", jeu="A")
+        self.assertEqual(run("sauvegarder", "-m", self.master, "--jeu", "A")[0], 0)
+        big = os.path.join(self.tmp, "grand")
+        self.cap(big, 50 * KB)
+        rc, out = run("regrouper", big, "-m", self.master, "--meme-disque")
+        self.assertEqual(rc, 2, out)
+        self.assertIn("Pas assez de place", out)
+        self.cap(big, 1000 * KB)
+        # Un fichier abîmé sur ARCHIVE-2 : il n'est pas copié, et rien n'est libéré
+        bad = next(p for p, v in self.q("SELECT s.path, v.name FROM stored s JOIN volumes v ON v.id=s.volume")
+                   if v == "ARCHIVE-2")
+        bad_path = os.path.join(v2, archive.to_os(bad))
+        with open(bad_path, "rb") as f:
+            good = f.read()
+        write(bad_path, b"X" * len(good))
+        rc, out = run("regrouper", big, "-m", self.master, "--meme-disque")
+        self.assertEqual(rc, 1, out)
+        self.assertIn("abîmé", out)
+        self.assertIn("7 / 8", out)
+        self.assertTrue(os.path.exists(os.path.join(self.master, "_catalogue", "catalogue.sqlite")))
+        # Réparé : la reprise ne copie que ce fichier, puis termine
+        write(bad_path, good)
+        rc, out = run("regrouper", big, "-m", self.master, "--meme-disque")
+        self.assertEqual(rc, 0, out)
+        self.assertIn("Copiés cette fois : 1", out)
+        self.assertIn("Regroupement terminé", out)
+        self.assertEqual(archive.LAST_REGROUP["master"], os.path.normpath(big))
+        # Les anciens disques ne sont plus une archive
+        self.assertFalse(os.path.exists(os.path.join(self.master, "_catalogue", "catalogue.sqlite")))
+        self.assertFalse(os.path.exists(os.path.join(v2, "_catalogue", "volume.json")))
+        self.assertTrue(os.path.exists(os.path.join(v2, archive.RETIRED_NOTE)))
+        # Le nouveau disque est l'archive complète, et la sauvegarde suit sans rien recopier
+        self.master = big
+        self.assertEqual(self.per_volume(), {"ARCHIVE-1": 8})
+        self.assertEqual(archive.read_marker(big)["number"], 1)
+        self.assertFalse(os.path.exists(os.path.join(big, "_catalogue", archive.REGROUP_MARKER)))
+        rc, out = run("verifier", "-m", big)
+        self.assertEqual(rc, 0, out)
+        rc, out = run("sauvegarder", "-m", big, "--jeu", "A")
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(self.q("SELECT COUNT(*) FROM backup_copies")[0][0], 8)
+        self.assertEqual(run("importer", self.srcs[2], "-m", big, "-l", "S2")[0], 0)
+        self.assertEqual(self.per_volume(), {"ARCHIVE-1": 12})
+
     def test_unplugged_disk(self):
         self.cap(self.master, 45 * KB)
         v2 = self.add_disk("vol2", 100 * KB)
@@ -718,6 +870,36 @@ class GuiTest(Base):
         app._set_activity("ok")
         app.toggle_log(True)
         app.update_idletasks()
+
+    def test_regroup_from_gui(self):
+        """Regroupement lancé depuis l'interface : en pause, la carte propose de le reprendre ; à la fin,
+        l'interface s'ouvre sur le nouveau disque et met « Nos souvenirs » à jour."""
+        from unittest import mock
+        import archive_gui
+        run("importer", self.src1, "-m", self.master, "-l", "Disque1")
+        big = os.path.join(self.tmp, "grand", "ArchiveFamiliale")
+        app = self.open_app()
+        with contextlib.closing(self.db()) as con:   # regroupement en pause
+            con.execute("INSERT INTO meta(key,value) VALUES('regroup_target', ?)", (big,))
+            con.commit()
+        app.refresh()
+        self.assertEqual(app.hero_title.cget("text"), "Regroupement de l'archive à reprendre")
+        with contextlib.closing(self.db()) as con:
+            con.execute("DELETE FROM meta WHERE key='regroup_target'")
+            con.commit()
+        with mock.patch.object(archive_gui, "messagebox") as mb, \
+                mock.patch.object(archive, "_check_new_volume_location"):   # même disque physique, ici
+            app._run_regroup(big)
+            end = time.monotonic() + 30
+            while app.busy or not mb.showinfo.called or not os.path.exists(
+                    os.path.join(big, "_catalogue", "souvenirs", "donnees.js")):
+                self.assertLess(time.monotonic(), end, "le regroupement ne se termine pas")
+                app.update()
+                time.sleep(0.02)
+        self.assertTrue(archive.same_path(app.master_path, big))
+        self.assertIn("Regroupement terminé", mb.showinfo.call_args[0][1])
+        with open(os.path.join(self.tmp, "appdata", "ArchiveFamiliale", "config.json"), encoding="utf-8") as f:
+            self.assertTrue(archive.same_path(json.load(f)["master"], big))
 
     def run_queue(self, app, items, until):
         """Lance une file d'import et fait tourner l'interface jusqu'à until(app) (30 s maximum)."""

@@ -35,13 +35,15 @@ if (!D) {
   throw new Error("donnees.js manquant");
 }
 
-/* Fichiers : [chemin, famille, année, mois, album, taille, vignette] */
+/* Fichiers : [chemin, famille, année, mois, album, taille, vignette, catégorie « important »] */
 const FILES = D.files.map((r, i) => {
   const name = r[0].split("/").pop();
   const dot = name.lastIndexOf(".");
-  return { i, path: r[0], fam: r[1], y: r[2], m: r[3], album: r[4], size: r[5], thumb: r[6], name,
+  return { i, path: r[0], fam: r[1], y: r[2], m: r[3], album: r[4], size: r[5], thumb: r[6], imp: r[7] || "", name,
     ext: dot > 0 ? name.slice(dot + 1).toLowerCase() : "", low: name.toLowerCase() };
 });
+const IMPORTANT = FILES.filter((f) => f.imp);
+const IMP_CATS = D.important || {};   // clé -> [libellé, icône]
 const MEDIA = FILES.filter((f) => f.fam === "photo" || f.fam === "video");
 const byDate = (a, b) => (a.y - b.y) || (a.m - b.m) || a.album.localeCompare(b.album, "fr") || a.name.localeCompare(b.name, "fr");
 MEDIA.sort(byDate);
@@ -72,6 +74,7 @@ function groupBy(list, key) {
 const SECTIONS = [
   ["#/", "Accueil"],
   ["#/photos", "Photos et vidéos"],
+  ...(IMPORTANT.length ? [["#/importants", "Papiers importants"]] : []),
   ["#/documents", "Documents"],
   ["#/musique", "Musique"],
   ["#/autres", "Autres fichiers"],
@@ -94,6 +97,7 @@ function route() {
   if (section === "photos" && arg) return yearView(arg === "inconnue" ? 0 : Number(arg));
   if (section === "photos") return yearsView();
   if (section === "documents") return docsView(arg || "");
+  if (section === "importants") return importantView(arg || "");
   if (section === "musique") return musicView();
   if (section === "autres") return othersView();
   if (section === "recherche") return searchView(arg || "");
@@ -127,6 +131,8 @@ function homeView() {
   if (MEDIA.length) facts.push(`<b>${plural(photos.length, "photo", "photos")}</b> et <b>${plural(videos.length, "vidéo", "vidéos")}</b>, ${period(MEDIA)}.`);
   if (best) facts.push(`L'année la plus riche en souvenirs : <b>${best[0]}</b>, avec ${plural(best[1], "photo ou vidéo", "photos et vidéos")}.`);
   if (docs.length) facts.push(`<b>${plural(docs.length, "document", "documents")}</b> (textes, tableurs, présentations, PDF), ${period(docs)}.`);
+  if (IMPORTANT.length) facts.push(`<b>${plural(IMPORTANT.length, "papier qui semble important", "papiers qui semblent importants")}</b> :
+    identité, fiches de paie, diplômes, impôts… <a href="#/importants">Les voir</a>.`);
   const note = D.others && D.others.length ? `<p class="note">Cette archive est répartie sur plusieurs disques. Ce disque,
     « ${esc(D.disk)} », en contient une partie. Les autres fichiers sont sur : ${D.others.map((o) => `« ${esc(o.name)} »
     (${plural(o.files, "fichier", "fichiers")})`).join(", ")}.</p>` : "";
@@ -138,6 +144,7 @@ function homeView() {
     <ul class="facts">${facts.map((f) => `<li>${f}</li>`).join("")}</ul>
     <div class="tiles">
       ${tile("#/photos", "Photos et vidéos", plural(MEDIA.length, "souvenir", "souvenirs"), cover(MEDIA, "🖼️"))}
+      ${tile("#/importants", "Papiers importants", plural(IMPORTANT.length, "document", "documents"), `<div class="cover icon">⭐</div>`)}
       ${tile("#/documents", "Documents", plural(docs.length, "document", "documents"), `<div class="cover icon">📂</div>`)}
       ${tile("#/musique", "Musique", plural(music.length, "morceau", "morceaux"), `<div class="cover icon">🎵</div>`)}
       ${tile("#/autres", "Autres fichiers", plural(others.length, "fichier", "fichiers"), `<div class="cover icon">🗂️</div>`)}
@@ -331,6 +338,28 @@ function docsView(kind) {
       ${counts.map(([k, n]) => `<a href="#/documents/${encodeURIComponent(k)}" class="${k === kind ? "on" : ""}">${ICONS[k]} ${esc(cap(D.families[k] || k))} (${fmtInt(n)})</a>`).join("")}</div>`;
   if (!list.length) { main.insertAdjacentHTML("beforeend", '<p class="empty">Aucun document de ce type.</p>'); return; }
   byYearSections(list);
+}
+
+function importantView(kind) {
+  const list = kind ? IMPORTANT.filter((f) => f.imp === kind) : IMPORTANT;
+  const keys = Object.keys(IMP_CATS).filter((k) => IMPORTANT.some((f) => f.imp === k));
+  main.innerHTML = `
+    <h1>Papiers importants</h1>
+    <p class="lead">${plural(IMPORTANT.length, "document", "documents")} qui semblent importants, repérés d'après leur
+      nom ou leur dossier : papiers d'identité, fiches de paie, diplômes, impôts, logement, santé… Il peut y avoir des
+      intrus : dans le doute, ils ont été gardés ici. Cliquez sur un document pour l'ouvrir.</p>
+    <div class="tabs"><a href="#/importants" class="${kind ? "" : "on"}">Tous</a>
+      ${keys.map((k) => `<a href="#/importants/${k}" class="${k === kind ? "on" : ""}">${IMP_CATS[k][1]} ${esc(IMP_CATS[k][0])}
+        (${fmtInt(IMPORTANT.filter((f) => f.imp === k).length)})</a>`).join("")}</div>`;
+  if (!list.length) { main.insertAdjacentHTML("beforeend", '<p class="empty">Aucun document dans cette catégorie.</p>'); return; }
+  if (kind) { byYearSections(list); return; }
+  for (const k of keys) {   // « Tous » : une partie par catégorie
+    const l = list.filter((f) => f.imp === k).sort((a, b) => (b.y - a.y) || a.name.localeCompare(b.name, "fr"));
+    const h = document.createElement("h2");
+    h.innerHTML = `${IMP_CATS[k][1]} ${esc(IMP_CATS[k][0])} <span class="muted">· ${fmtInt(l.length)}</span>`;
+    main.append(h);
+    pagedList(main, l);
+  }
 }
 
 function playAudio(f) {

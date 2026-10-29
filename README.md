@@ -107,6 +107,11 @@ Quand l'import est terminé, le programme ouvre l'étape 7 : **ce que contient v
 photos, de vidéos, de musiques, de textes, de tableurs, de présentations, de PDF… et sur quelle
 période ; une frise des photos et vidéos année par année ; et la place que prenaient les doublons.
 
+Il repère aussi les **documents importants** : papiers d'identité, livret de famille, fiches de paie,
+diplômes, impôts, bail et actes de vente, santé, carte grise, banque et assurances… Ils sont trouvés
+d'après leur nom et leur dossier (« Papiers/Impôts/2012/avis.pdf », « CNI Jean.jpg »). Il peut y avoir
+quelques intrus : le programme préfère un document de trop à un papier important oublié.
+
 ![Le bilan : photos, vidéos, documents et leurs périodes](docs/images/bilan.png)
 
 ### Pour la famille : « Nos souvenirs » 💝
@@ -118,6 +123,8 @@ pas à fouiller dans des dossiers, le programme pose sur chaque disque une petit
   navigateur, sans rien installer, sur Windows comme sur Mac ;
 - les **photos et vidéos par année**, puis par album (« Vacances Bretagne »), avec un affichage en
   grand, des flèches et un bouton **Diaporama** ;
+- les **papiers importants** rangés par catégorie (identité, travail et salaires, diplômes, impôts,
+  logement, santé…) ;
 - les **documents** par type et par année (les PDF s'ouvrent directement), la **musique** à écouter,
   et une **recherche** par nom, lieu ou année ;
 - rien ne peut être effacé ni modifié depuis cette page.
@@ -128,6 +135,20 @@ disques »** (étape 7) la refait à la demande, par exemple après avoir branch
 ![« Nos souvenirs » : l'accueil](docs/images/souvenirs-accueil.png)
 
 ![« Nos souvenirs » : une année, rangée par album](docs/images/souvenirs-annee.png)
+
+![« Nos souvenirs » : les papiers importants](docs/images/souvenirs-importants.png)
+
+Les petites images des photos (vignettes) sont fabriquées **pendant l'import**, avec les photos déjà
+lues : la page est prête dès la fin, sans heures de calcul en plus.
+
+### Passer à un disque plus grand
+
+Votre archive tient sur plusieurs disques et vous avez maintenant un disque plus grand ? À l'étape 1,
+**« Regrouper sur un plus grand disque… »** copie toute l'archive sur ce disque, **relit chaque copie**
+pour s'assurer qu'elle est parfaite, puis en fait le nouvel `ARCHIVE-1`. Les anciens disques ne sont
+jamais modifiés pendant la copie ; une fois tout vérifié, ils sont « libérés » : vous pouvez les
+formater (dans l'Explorateur, clic droit sur le disque → « Formater… ») pour vous en resservir.
+Comptez quelques heures par téraoctet ; le regroupement peut être mis en pause et repris.
 
 ### Être prévenu sur son téléphone 📱
 
@@ -254,6 +275,18 @@ Les autres dossiers placés à la racine du disque (par exemple `C:\Jeux`) sont 
 programme les liste à la fin de l'inventaire. Si l'un d'eux contient des photos ou des documents,
 ajoutez-le avec « Ajouter un dossier précis » dans la fenêtre de choix des disques. Les fichiers
 OneDrive « en ligne uniquement » sont ignorés (ils ne sont pas vraiment sur le disque).
+</details>
+
+<details>
+<summary><b>Pourquoi l'import de milliers de photos prend-il autant de temps ?</b></summary>
+
+Avec beaucoup de petits fichiers, ce ne sont plus les données qui comptent mais le nombre de fichiers :
+pour chacun, le disque doit le trouver, puis l'archive doit l'écrire et le **mettre en sûreté**
+(le programme attend qu'il soit réellement écrit avant de l'inscrire au catalogue : c'est ce qui permet
+de couper le courant sans rien perdre). Depuis la version 2.7, le programme lit les fichiers suivants
+pendant qu'il traite le précédent et met plusieurs fichiers en sûreté à la fois : sur des disques USB,
+comptez environ 25 % de temps en moins pour des photos. Au-delà, c'est la vitesse du vieux disque qui
+décide ; le journal (« Ouvrir le journal ») indique à la fin de chaque disque lequel a freiné.
 </details>
 
 <details>

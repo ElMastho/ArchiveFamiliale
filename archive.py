@@ -44,7 +44,7 @@ import uuid
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 
-VERSION = "2.6.0"
+VERSION = "2.7.0"
 
 ARCHIVE_FOLDER = "ArchiveFamiliale"          # nom de dossier conseillé sur chaque disque
 CATALOG_DIR = "_catalogue"
@@ -59,10 +59,13 @@ SLOW_DISK = 45 * 1024 ** 2                  # en dessous : sans doute branché e
 REVERIFY_DAYS = 365                          # une copie relue sans défaut n'est relue qu'un an plus tard
 SPEED_TEST_MIN = 1024 ** 3                   # mesure de vitesse seulement pour les imports d'au moins 1 Go
 WRITE_QUEUE_CHUNKS = 32                      # au plus 128 Mo en attente d'écriture (< marge d'espace libre)
+SYNC_THREADS = 4                             # fichiers synchronisés (fsync) en même temps sur l'archive
+PREFETCH_FILE_MAX = 32 * 1024 ** 2           # fichiers lus d'avance (pendant le traitement du précédent)…
+PREFETCH_BYTES = 256 * 1024 ** 2             # … dans la limite de cette mémoire
 FREE_SPACE_MARGIN = 2 * 1024 ** 3            # toujours 2 Go libres sur chaque disque
 PRIMARY_EXTRA_MARGIN = 8 * 1024 ** 3         # + 8 Go sur ARCHIVE-1 pour le catalogue
-COMMIT_EVERY_FILES = 500
-COMMIT_EVERY_SECONDS = 5.0
+COMMIT_EVERY_FILES = 2000
+COMMIT_EVERY_SECONDS = 30.0
 SNAPSHOTS_KEPT = 5
 IS_WINDOWS = os.name == "nt"
 
@@ -743,8 +746,10 @@ class _WriteJob:
 
 class Writer:
     """Écriture en tâche de fond, à la chaîne : pendant que le thread principal lit (et calcule
-    l'empreinte d')un fichier sur un disque, un thread écrit le précédent sur l'autre, et un
-    troisième le synchronise (fsync), lui remet ses dates et le renomme de .partial en nom final.
+    l'empreinte d')un fichier sur un disque, un thread écrit le précédent sur l'autre, et d'autres
+    (SYNC_THREADS) le synchronisent (fsync), lui remettent ses dates et le renomment de .partial en
+    nom final. Synchroniser un fichier attend le disque : avec beaucoup de petits fichiers, c'était
+    l'étape la plus lente ; plusieurs à la fois, le disque les regroupe.
     flush() attend la fin de tout cela ; il est appelé avant chaque commit du catalogue
     (Archive.commit) : un fichier n'est donc jamais inscrit au catalogue avant d'être réellement
     sur le disque.
@@ -758,10 +763,13 @@ class Writer:
         self.failed = []          # remis au thread principal par flush()
         self.pending = 0          # octets confiés, pas encore écrits dans un fichier
         self.lock = threading.Lock()
+        self.put_wait = 0.0       # temps passé par le thread principal à attendre l'écriture
         self.thread = threading.Thread(target=self._run, name="ecriture", daemon=True)
-        self.sync_thread = threading.Thread(target=self._run_sync, name="synchro", daemon=True)
+        self.sync_threads = [threading.Thread(target=self._run_sync, name=f"synchro{i}", daemon=True)
+                             for i in range(SYNC_THREADS)]
         self.thread.start()
-        self.sync_thread.start()
+        for t in self.sync_threads:
+            t.start()
 
     # -- thread principal --
     def start(self, src: str, dst: str, on_fail) -> _WriteJob:
@@ -772,7 +780,12 @@ class Writer:
     def write(self, job: _WriteJob, data: bytes):
         with self.lock:
             self.pending += len(data)
-        self.q.put(("data", job, data))
+        try:
+            self.q.put_nowait(("data", job, data))
+        except queue.Full:
+            t0 = time.monotonic()
+            self.q.put(("data", job, data))
+            self.put_wait += time.monotonic() - t0
 
     def end(self, job: _WriteJob, keep: bool = True):
         job.keep = keep
@@ -793,16 +806,20 @@ class Writer:
         self.flush()
         self.q.put(("stop", None, None))
         self.thread.join()
-        self.sync_thread.join()
+        for t in self.sync_threads:
+            t.join()
 
     # -- thread d'écriture --
     def _run(self):
         while True:
             op, job, arg = self.q.get()
             if op in ("stop", "flush"):
-                self.sq.put((op, arg))   # dans l'ordre, après les fichiers déjà écrits
+                self.sq.join()           # tous les fichiers déjà écrits sont synchronisés et renommés
                 if op == "stop":
+                    for _ in self.sync_threads:
+                        self.sq.put(("stop", None))
                     return
+                arg.set()
                 continue
             try:
                 if job.error is not None:
@@ -830,13 +847,9 @@ class Writer:
     # -- thread de synchronisation --
     def _run_sync(self):
         while True:
-            op, arg = self.sq.get()
+            op, job = self.sq.get()
             if op == "stop":
                 return
-            if op == "flush":
-                arg.set()
-                continue
-            job = arg
             try:
                 job.fo.flush()
                 os.fsync(job.fo.fileno())
@@ -846,6 +859,8 @@ class Writer:
                 os.replace(lp(job.tmp), lp(job.dst))
             except Exception as exc:
                 self._fail(job, exc)
+            finally:
+                self.sq.task_done()
 
     def _fail(self, job: _WriteJob, exc: Exception):
         job.error = exc
@@ -882,6 +897,73 @@ def copy_async(writer: Writer, src: str, dst: str, progress: Progress | None, on
     digest = h.hexdigest()
     writer.end(job, keep=expect is None or digest == expect)
     return digest
+
+
+class Prefetcher:
+    """Lit d'avance, dans un thread, les fichiers d'au plus PREFETCH_FILE_MAX, dans l'ordre où ils
+    seront traités : pendant que le thread principal calcule l'empreinte d'un fichier, consulte le
+    catalogue et le confie à l'écriture, les suivants sont déjà en cours de lecture. Chaque fichier
+    n'est toujours lu qu'une fois. take() doit être appelé pour chaque fichier, dans l'ordre."""
+
+    def __init__(self, root: str, entries: list, skip: set):
+        self.root = root
+        self.todo = [e for e in entries if e.size <= PREFETCH_FILE_MAX and e.rel not in skip]
+        self.planned = {e.rel for e in self.todo}
+        self.ready = {}
+        self.budget = PREFETCH_BYTES
+        self.wait = 0.0           # temps passé par le thread principal à attendre la lecture
+        self.cond = threading.Condition()
+        self.stopped = False
+        self.thread = threading.Thread(target=self._run, name="lecture", daemon=True)
+        self.thread.start()
+
+    def _run(self):
+        for e in self.todo:
+            with self.cond:
+                while not self.stopped and self.ready and self.budget < e.size:
+                    self.cond.wait()
+                if self.stopped:
+                    return
+                self.budget -= e.size
+            try:
+                parts = []
+                with open(lp(os.path.join(self.root, to_os(e.rel))), "rb", buffering=0) as f:
+                    while True:
+                        chunk = f.read(CHUNK)
+                        if not chunk:
+                            break
+                        parts.append(chunk)
+                res = parts
+            except OSError as exc:
+                res = exc
+            with self.cond:
+                self.ready[e.rel] = res
+                self.cond.notify_all()
+
+    def take(self, e: Entry):
+        """Contenu de e lu d'avance (liste de blocs), None s'il n'est pas lu d'avance ; lève
+        l'erreur de lecture s'il y en a eu une."""
+        if e.rel not in self.planned:
+            return None
+        self.planned.discard(e.rel)
+        t0 = time.monotonic()
+        with self.cond:
+            while e.rel not in self.ready:
+                check_cancel()
+                self.cond.wait(0.5)
+            res = self.ready.pop(e.rel)
+            self.budget += e.size
+            self.cond.notify_all()
+        self.wait += time.monotonic() - t0
+        if isinstance(res, Exception):
+            raise res
+        return res
+
+    def stop(self):
+        with self.cond:
+            self.stopped = True
+            self.ready.clear()
+            self.cond.notify_all()
 
 
 def measure_read_speed(path: str, limit: int = 256 * 1024 ** 2, seconds: float = 3.0):
@@ -1331,11 +1413,12 @@ class Archive:
 
     def make_dest_rel(self, label: str, rel: str, vroot: str) -> str:
         """Chemin de destination : <label>/<chemin d'origine>, rendu valide et unique dans toute
-        l'archive (suffixe « (2) », « (3) »… en cas de collision)."""
+        l'archive (suffixe « (2) », « (3) »… en cas de collision). Un fichier présent sur le disque
+        mais absent du catalogue (copie interrompue par une coupure de courant) est remplacé."""
         parts = [sanitize_component(label)] + [sanitize_component(p) for p in rel.split("/")]
         cand = "/".join(parts)
         i = 2
-        while self.stored_row(cand) is not None or os.path.lexists(lp(os.path.join(vroot, to_os(cand)))):
+        while self.stored_row(cand) is not None or os.path.isdir(lp(os.path.join(vroot, to_os(cand)))):
             stem, ext = os.path.splitext(parts[-1])
             cand = "/".join(parts[:-1] + [f"{stem} ({i}){ext}"])
             i += 1
@@ -1634,6 +1717,7 @@ def _register_source(ar: Archive, label: str, root: str, note: str | None, force
 
 LAST_ESTIMATE: dict | None = None   # résultat de la dernière estimation (lu par l'interface)
 LAST_RUN: dict = {}                  # bilan chiffré du dernier import (lu par l'interface)
+LAST_REGROUP: dict = {}              # regroupement terminé : nouveau dossier de l'archive, disques libérés
 
 
 def cmd_estimate(args) -> int:
@@ -1847,10 +1931,14 @@ def _ingest(ar: Archive, args, copy: bool) -> int:
     progress = Progress(len(entries), total_bytes)
     interrupted = False
     fatal = None
+    prefetch = Prefetcher(root, entries, done)
+    thumbs = _thumbnailer(ar) if copy else None
+    flush_wait = 0.0
     try:
         for e in entries:
             try:
-                _process_entry(ar, label, root, e, copy, st, progress, alloc, prefer)
+                _process_entry(ar, label, root, e, copy, st, progress, alloc, prefer,
+                               prefetch.take(e), thumbs)
             except FatalCopyError as exc:
                 fatal = str(exc)
                 break
@@ -1864,11 +1952,22 @@ def _ingest(ar: Archive, args, copy: bool) -> int:
             st.files += 1
             st.bytes += e.size
             progress.file_done(e.size)
+            t0 = time.monotonic()
             ar.maybe_commit()
+            flush_wait += time.monotonic() - t0
     except KeyboardInterrupt:
         interrupted = True
+    finally:
+        prefetch.stop()
+        if thumbs:
+            thumbs.close()
     elapsed = progress.finish()
     ar.commit()   # attend la fin des écritures : les erreurs d'écriture sont comptées avant le bilan
+    # Où est passé le temps : pour savoir, sur un import lent, quel disque freine.
+    log.info("Temps de %s : %s au total ; attente de la lecture %s, de l'écriture %s, des enregistrements "
+             "du catalogue %s%s", label, fmt_duration(elapsed), fmt_duration(prefetch.wait),
+             fmt_duration(ar._writer.put_wait if ar._writer else 0), fmt_duration(flush_wait),
+             f" ; {thumbs.made} vignettes faites au passage" if thumbs else "")
 
     completed =copy and not interrupted and not fatal and st.errors == 0
     now = now_iso()
@@ -1924,8 +2023,28 @@ def _ingest(ar: Archive, args, copy: bool) -> int:
     return 0 if st.errors == 0 else 1
 
 
+def _thumbnailer(ar: Archive):
+    """Vignettes de « Nos souvenirs » faites pendant l'import, à partir des photos déjà en mémoire
+    (aucune lecture en plus), sur les cœurs libres du processeur. None si Pillow manque."""
+    import vignettes
+    if not vignettes.available():
+        return None
+    return vignettes.Background(lambda h: lp(os.path.join(ar.cat_dir, *vignettes.CACHE_PARTS, h[:2], h + ".jpg")))
+
+
+def _hash_parts(parts, progress: Progress | None = None) -> str:
+    h = new_hasher()
+    for p in parts:
+        h.update(p)
+        if progress:
+            progress.add(len(p))
+    return h.hexdigest()
+
+
 def _process_entry(ar: Archive, label: str, root: str, e: Entry, copy: bool,
-                   st: RunStats, progress: Progress, alloc: Allocator | None, prefer):
+                   st: RunStats, progress: Progress, alloc: Allocator | None, prefer,
+                   pre=None, thumbs=None):
+    """pre : contenu du fichier déjà lu (Prefetcher), ou None."""
     row = ar.occurrence(label, e.rel)
     unchanged = (row is not None and row["hash"] and row["size"] == e.size
                  and row["mtime_ns"] == e.mtime_ns)
@@ -1937,7 +2056,7 @@ def _process_entry(ar: Archive, label: str, root: str, e: Entry, copy: bool,
     src = os.path.join(root, to_os(e.rel))
 
     if not copy:   # scan : on calcule seulement l'empreinte
-        h = known_hash or hash_file(src, progress)
+        h = known_hash or (_hash_parts(pre, progress) if pre is not None else hash_file(src, progress))
         ar.upsert_occurrence(label, e, h, "scanned")
         st.scanned += 1
         return
@@ -1946,7 +2065,12 @@ def _process_entry(ar: Archive, label: str, root: str, e: Entry, copy: bool,
     # on copie directement (une seule lecture). Sinon on calcule d'abord le hash ; un petit
     # fichier est alors gardé en mémoire pour ne pas le relire s'il faut le copier.
     parts = None
-    if known_hash:
+    if pre is not None:   # déjà lu : l'empreinte ne coûte que du calcul
+        parts, h = pre, _hash_parts(pre, progress)
+        if known_hash and h != known_hash:
+            raise OSError("contenu différent entre deux lectures (disque instable ou fichier "
+                          "modifié pendant la lecture)")
+    elif known_hash:
         h = known_hash
     elif e.keep_whole or not ar.size_known(e.size):
         h = None
@@ -2001,6 +2125,8 @@ def _process_entry(ar: Archive, label: str, root: str, e: Entry, copy: bool,
     st.copied += 1
     st.copied_bytes += e.size
     st.per_volume[vid] += e.size
+    if thumbs and parts is not None:
+        thumbs.submit(h2, e.rel, parts)
 
 
 def _set_backlog(ar: Archive, set_id: str):
@@ -2702,6 +2828,286 @@ def cmd_repair_catalog(args) -> int:
 
 
 # --------------------------------------------------------------------------- #
+# Regrouper l'archive sur un seul (plus grand) disque
+# --------------------------------------------------------------------------- #
+
+REGROUP_MARKER = "regroupement.json"   # sur le disque cible, tant que le regroupement n'est pas fini
+RETIRED_NOTE = "ANCIENNE ARCHIVE - ce disque peut être effacé.txt"
+SOUVENIRS_LAUNCHER = "▶ Nos souvenirs.html"   # souvenirs.LAUNCHER
+
+
+def find_regroup_target(target: str | None, archive_id: str):
+    """Dossier du disque cible d'un regroupement en cours (même si sa lettre a changé), ou None.
+    target : dernier emplacement connu (meta regroup_target)."""
+    if not target:
+        return None
+    cands = [target]
+    sub = subpath_of(target)
+    if sub and IS_WINDOWS:
+        cands += [d.root[:2] + sub for d in list_drives()]
+    for c in cands:
+        try:
+            with open(os.path.join(c, CATALOG_DIR, REGROUP_MARKER), encoding="utf-8") as f:
+                if json.load(f).get("archive_id") == archive_id:
+                    return c
+        except (OSError, ValueError, TypeError):
+            continue
+    return None
+
+
+def cmd_regroup(args) -> int:
+    ar = Archive(args.master)
+    try:
+        return _regroup(ar, args)
+    finally:
+        if ar.db is not None:
+            ar.close()
+
+
+def _regroup(ar: Archive, args) -> int:
+    """Copie toute l'archive (tous ses disques) sur un seul disque, relit chaque copie, puis fait de ce
+    disque le nouvel ARCHIVE-1 : les anciens disques peuvent alors être formatés. Reprend là où il
+    s'était arrêté. Les jeux de sauvegarde ne changent pas."""
+    LAST_REGROUP.clear()
+    dst = normalize_dir(args.dossier)
+    ar.db.execute("CREATE TABLE IF NOT EXISTS regroup(path TEXT PRIMARY KEY COLLATE NOCASE, state TEXT NOT NULL)")
+    current = find_regroup_target(ar.meta("regroup_target"), ar.archive_id)
+    if current and not same_path(current, dst):
+        raise UserError(f"Un regroupement vers {current} est déjà en cours. Reprenez-le (même disque), ou "
+                        f"effacez ce dossier pour en commencer un autre.")
+    if not current:
+        if read_marker(dst):
+            raise UserError(f"{dst} est déjà un disque d'archive : choisissez un disque neuf (ou vide).")
+        _check_new_volume_location(ar, dst, args.meme_disque)
+        ar.db.execute("DELETE FROM regroup")
+        os.makedirs(os.path.join(dst, CATALOG_DIR), exist_ok=True)
+        with open(os.path.join(dst, CATALOG_DIR, REGROUP_MARKER), "w", encoding="utf-8") as f:
+            json.dump({"archive_id": ar.archive_id, "started": now_iso(),
+                       "info": "Regroupement de l'Archive Familiale en cours sur ce disque : ne pas modifier."},
+                      f, indent=2, ensure_ascii=False)
+        ar.set_meta("regroup_target", dst)
+        ar.db.commit()
+        log.info("Regroupement de l'archive vers %s", dst)
+    else:
+        ar.set_meta("regroup_target", dst)   # la lettre a pu changer
+
+    vols = ar.volumes(MAIN_SET)
+    roots = ar.resolve_roots(MAIN_SET)
+    total_n, total_b = ar.db.execute("SELECT COUNT(*), COALESCE(SUM(size),0) FROM stored").fetchone()
+    left_n, left_b = ar.db.execute("SELECT COUNT(*), COALESCE(SUM(size),0) FROM stored s WHERE NOT EXISTS "
+                                   "(SELECT 1 FROM regroup r WHERE r.path=s.path)").fetchone()
+    free = volume_free(dst) - FREE_SPACE_MARGIN - PRIMARY_EXTRA_MARGIN
+    print(f"Regroupement de l'archive ({fmt_int(total_n)} fichiers, {fmt_size(total_b)}) sur {dst}")
+    for v in vols:
+        r = roots.get(v["id"])
+        print(f"  {v['name']:<12} " + (f"branché ({r})" if r else "NON BRANCHÉ"))
+    if left_b > free:
+        raise UserError(f"Pas assez de place sur {dst} : il faut encore {fmt_size(left_b)}, il y a "
+                        f"{fmt_size(max(free, 0))} disponibles (hors marge de sécurité). Choisissez un disque plus "
+                        f"grand.")
+
+    # 1. Copie, disque par disque, dans l'ordre où les fichiers y sont rangés
+    st = RunStats()
+    progress = Progress(left_n, left_b)
+    interrupted = False
+    missing = [v["name"] for v in vols if not roots.get(v["id"]) and ar.db.execute(
+        "SELECT 1 FROM stored s WHERE volume=? AND NOT EXISTS (SELECT 1 FROM regroup r WHERE r.path=s.path) "
+        "LIMIT 1", (v["id"],)).fetchone()]
+    try:
+        for v in vols:
+            vroot = roots.get(v["id"])
+            if not vroot:
+                continue
+            rows = ar.db.execute("SELECT path, hash, size FROM stored s WHERE volume=? AND NOT EXISTS "
+                                 "(SELECT 1 FROM regroup r WHERE r.path=s.path) ORDER BY path",
+                                 (v["id"],)).fetchall()
+            if not rows:
+                continue
+            print(f"Copie des fichiers de {v['name']} ({fmt_int(len(rows))})…")
+            entries = [Entry(r["path"], r["size"], 0, 0, False) for r in rows]
+            if IS_WINDOWS:
+                entries = order_by_disk_position(vroot, entries, set())
+            info = {r["path"]: r for r in rows}
+            for e in entries:
+                r = info[e.rel]
+                src, dest = os.path.join(vroot, to_os(e.rel)), os.path.join(dst, to_os(e.rel))
+                try:
+                    def on_fail(exc, path=e.rel):
+                        ar.db.execute("DELETE FROM regroup WHERE path=?", (path,))
+                        st.errors += 1
+                        log.error("[regroupement] %s : écriture impossible : %s", path, exc)
+                    h = copy_async(ar.writer(), src, dest, progress, on_fail, expect=r["hash"])
+                    if h != r["hash"]:
+                        raise OSError(f"le fichier de {v['name']} est abîmé (son contenu ne correspond plus à "
+                                      f"son empreinte) : restaurez-le depuis une sauvegarde, puis relancez")
+                    ar.db.execute("INSERT OR REPLACE INTO regroup(path,state) VALUES(?, 'copied')", (e.rel,))
+                    st.copied += 1
+                    st.copied_bytes += e.size
+                except OSError as exc:
+                    if is_disk_full(exc):
+                        raise UserError(f"Le disque {dst} est plein.") from exc
+                    st.errors += 1
+                    if len(st.error_samples) < 10:
+                        st.error_samples.append(f"{e.rel} -> {exc}")
+                    log.error("[regroupement] %s : %s", e.rel, exc)
+                progress.file_done(e.size)
+                ar.maybe_commit()
+    except KeyboardInterrupt:
+        interrupted = True
+    progress.finish()
+    ar.commit()
+
+    # 2. Relecture de chaque copie
+    if not interrupted:
+        rows = ar.db.execute("SELECT r.path, s.hash, s.size FROM regroup r JOIN stored s ON s.path=r.path "
+                             "WHERE r.state='copied' ORDER BY r.path").fetchall()
+        if rows:
+            print(f"Relecture des copies ({fmt_int(len(rows))} fichiers)…")
+            progress = Progress(len(rows), sum(r["size"] for r in rows))
+            try:
+                for r in rows:
+                    try:
+                        good = hash_file(os.path.join(dst, to_os(r["path"])), progress) == r["hash"]
+                    except OSError as exc:
+                        good, why = False, str(exc)
+                    else:
+                        why = "copie différente de l'original"
+                    if good:
+                        ar.db.execute("UPDATE regroup SET state='verified' WHERE path=?", (r["path"],))
+                    else:   # sera recopié à la prochaine reprise
+                        ar.db.execute("DELETE FROM regroup WHERE path=?", (r["path"],))
+                        st.errors += 1
+                        if len(st.error_samples) < 10:
+                            st.error_samples.append(f"{r['path']} -> {why}")
+                        log.error("[regroupement] relecture de %s : %s", r["path"], why)
+                    progress.file_done(r["size"])
+                    ar.maybe_commit()
+            except KeyboardInterrupt:
+                interrupted = True
+            progress.finish()
+            ar.commit()
+
+    done_n = ar.db.execute("SELECT COUNT(*) FROM regroup r JOIN stored s ON s.path=r.path "
+                           "WHERE r.state='verified'").fetchone()[0]
+    print()
+    print(f"Copiés cette fois : {fmt_int(st.copied)} ({fmt_size(st.copied_bytes)}) ; "
+          f"copiés et vérifiés en tout : {fmt_int(done_n)} / {fmt_int(total_n)}")
+    for s in st.error_samples:
+        print(f"    ! {s}")
+    if interrupted:
+        print("\nEn pause. Relancez le regroupement (même disque) : il reprendra là où il s'était arrêté.")
+        return 130
+    if missing:
+        print(f"\nBranchez aussi {', '.join(missing)}, puis relancez : le regroupement continuera avec ses fichiers.")
+        return 1
+    if st.errors or done_n < total_n:
+        print("\nDes fichiers n'ont pas pu être copiés ou vérifiés : relancez le regroupement (il ne refait que "
+              "ceux-là). Les anciens disques restent l'archive tant que tout n'est pas vérifié.")
+        return 1
+    return _finish_regroup(ar, dst)
+
+
+def _finish_regroup(ar: Archive, dst: str) -> int:
+    """Tout est copié et vérifié : le disque cible devient ARCHIVE-1, les anciens sont libérés."""
+    print("Tout est copié et vérifié. Le nouveau disque devient l'archive…")
+    now = now_iso()
+    roots = ar.resolve_roots(MAIN_SET)
+    old = [(v["name"], roots.get(v["id"])) for v in ar.volumes(MAIN_SET)]
+    old_ids = [v["id"] for v in ar.volumes(MAIN_SET) if v["id"] != ar.primary_id]
+    # Fichiers copiés puis renommés depuis par un classement : ces copies-là ne servent plus
+    for (p,) in ar.db.execute("SELECT path FROM regroup r WHERE NOT EXISTS "
+                              "(SELECT 1 FROM stored s WHERE s.path=r.path)").fetchall():
+        try:
+            os.remove(lp(os.path.join(dst, to_os(p))))
+        except OSError:
+            pass
+    # 1. Le catalogue, copié sur le nouveau disque puis mis à jour là-bas
+    new_cat = os.path.join(dst, CATALOG_DIR)
+    ar.snapshot_db(os.path.join(new_cat, DB_NAME))
+    vname, serial, _ = volume_info(dst)
+    con = sqlite3.connect(os.path.join(new_cat, DB_NAME))
+    try:
+        q = ",".join("?" * len(old_ids))
+        con.execute("UPDATE stored SET volume=?, verified_at=?, verify_status='ok'", (ar.primary_id, now))
+        if old_ids:
+            con.execute(f"UPDATE moves SET volume=? WHERE volume IN ({q})", (ar.primary_id, *old_ids))
+            con.execute(f"DELETE FROM volumes WHERE id IN ({q})", old_ids)
+        con.execute("UPDATE volumes SET root=?, subpath=?, volume_serial=?, volume_name=?, capacity=?, last_seen=?, "
+                    "last_verify=?, last_verify_status='ok' WHERE id=?",
+                    (dst, subpath_of(dst), serial, vname, volume_total(dst), now, now, ar.primary_id))
+        con.execute("DROP TABLE IF EXISTS regroup")
+        con.execute("DELETE FROM meta WHERE key IN ('regroup_target', 'master_serial', 'master_subpath')")
+        con.execute("INSERT OR REPLACE INTO meta(key,value) VALUES('regrouped_at', ?)", (now,))
+        con.commit()
+    finally:
+        con.close()
+    # 2. Le reste du dossier _catalogue : journal, copies du catalogue, « Nos souvenirs », programme
+    skip = {DB_NAME, DB_NAME + "-wal", DB_NAME + "-shm", MARKER_NAME, REGROUP_MARKER, CATALOG_COPY_NAME}
+    for name in os.listdir(ar.cat_dir):
+        if name in skip:
+            continue
+        s, d = os.path.join(ar.cat_dir, name), os.path.join(new_cat, name)
+        try:
+            if os.path.isdir(s):
+                shutil.copytree(lp(s), lp(d), dirs_exist_ok=True)
+            else:
+                shutil.copy2(lp(s), lp(d))
+        except (OSError, shutil.Error) as e:
+            log.warning("Regroupement : copie de %s impossible : %s", s, e)
+    prim = dict(ar.volume(ar.primary_id))
+    write_marker(dst, ar.archive_id, prim)
+    os.remove(os.path.join(new_cat, REGROUP_MARKER))
+    log.info("Regroupement terminé : l'archive est maintenant sur %s", dst)
+    # 3. Les anciens disques ne font plus partie de l'archive
+    ar.close()
+    ar.db = None
+    freed = []
+    for name, root in old:
+        if not root:
+            continue
+        cat = os.path.join(root, CATALOG_DIR)
+        for a, b in ((MARKER_NAME, "volume-ancien.json"), (DB_NAME, "catalogue-ancien.sqlite"),
+                     (CATALOG_COPY_NAME, "catalogue-copie-ancien.sqlite")):
+            try:
+                os.replace(os.path.join(cat, a), os.path.join(cat, b))
+            except OSError:
+                pass
+        # Lanceurs de « Nos souvenirs » : celui de l'archive, et celui de la racine du disque s'il y mène
+        drive = drive_root_of(root)
+        launchers = [os.path.join(root, SOUVENIRS_LAUNCHER)]
+        if drive and same_path(os.path.dirname(os.path.normpath(root)), drive):
+            launchers.append(os.path.join(drive, SOUVENIRS_LAUNCHER))
+        for p in launchers:
+            try:
+                os.remove(lp(p))
+            except OSError:
+                pass
+        try:
+            with open(os.path.join(root, RETIRED_NOTE), "w", encoding="utf-8") as f:
+                f.write(f"Ce disque était « {name} » de l'Archive Familiale.\n\n"
+                        f"Le {dt.datetime.now():%d/%m/%Y}, toute l'archive a été copiée et vérifiée sur un autre "
+                        f"disque ({dst}). Ce disque n'en fait plus partie : vous pouvez l'effacer ou le formater.\n")
+        except OSError:
+            pass
+        freed.append((name, drive_root_of(root) or root))
+    LAST_REGROUP.update(master=dst, freed=freed)
+    # 4. Copies de secours du catalogue sur les disques de sauvegarde branchés
+    new = Archive(dst)
+    try:
+        new.record_master_location()
+        new.install_tool_copy()
+        new.sync_catalog_copies()
+    finally:
+        new.close()
+    print(f"\nRegroupement terminé : l'archive est maintenant sur {dst} (disque « ARCHIVE-1 »).")
+    print("Les anciens disques ne font plus partie de l'archive ; vous pouvez les formater :")
+    for name, where in freed:
+        print(f"  {name} ({where})")
+    print(f"Désormais, ouvrez l'archive avec : -m \"{dst}\"")
+    return 0
+
+
+# --------------------------------------------------------------------------- #
 # Ligne de commande
 # --------------------------------------------------------------------------- #
 
@@ -2718,6 +3124,7 @@ Exemples (Windows) :
   python archive.py sauvegarder   -m F:\ArchiveFamiliale --jeu Sauvegarde-A
   python archive.py verifier      -m F:\ArchiveFamiliale --jeu Sauvegarde-A
   python archive.py exporter      -m F:\ArchiveFamiliale
+  python archive.py regrouper K:\ArchiveFamiliale -m F:\ArchiveFamiliale
 
 Astuce : définissez ARCHIVE_MAITRE=F:\ArchiveFamiliale pour ne plus taper -m.
 """
@@ -2767,6 +3174,13 @@ def build_parser() -> argparse.ArgumentParser:
         sp.add_argument("--ordre-dossiers", action="store_true",
                         help="lire dossier par dossier au lieu de suivre l'emplacement des fichiers sur le disque")
         sp.set_defaults(func=lambda a, c=copy: cmd_ingest(a, c))
+
+    sp = sub.add_parser("regrouper", help="copier toute l'archive (tous ses disques) sur un seul disque plus grand, "
+                                          "vérifier, puis libérer les anciens disques")
+    sp.add_argument("dossier", metavar="DOSSIER", help="dossier vide sur le nouveau disque, ex. K:\\ArchiveFamiliale")
+    master_opt(sp)
+    sp.add_argument("--meme-disque", action="store_true", help=argparse.SUPPRESS)
+    sp.set_defaults(func=cmd_regroup)
 
     sp = sub.add_parser("option", help="réglages de l'archive (ex. ne pas faire de sauvegarde)")
     master_opt(sp)

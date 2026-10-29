@@ -41,8 +41,10 @@ le programme. Le mode d'emploi grand public est dans le [README](../README.md).
 | `archive_gui.py` | Interface graphique Tkinter (surcouche du moteur). |
 | `theme.py` | Apparence : couleurs, polices, icônes, formes arrondies (thème Sun Valley si installé). |
 | `classement.py` | Classement par type / date / événement (lecture EXIF, vidéo, Office, PDF sans dépendance). |
-| `bilan.py` | Bilan : nombre de fichiers par famille (photos, vidéos, textes…), période couverte, répartition par année, place gagnée sur les doublons. |
+| `bilan.py` | Bilan : nombre de fichiers par famille (photos, vidéos, textes…), période couverte, répartition par année, place gagnée sur les doublons, documents importants. |
+| `importants.py` | Documents importants : dictionnaire de mots (expressions régulières) par catégorie, appliqué au nom puis aux dossiers d'un fichier. |
 | `souvenirs.py`, `souvenirs_site/` | « Nos souvenirs » : visionneuse web posée sur chaque disque (page, liste des fichiers du disque, vignettes). |
+| `vignettes.py` | Vignettes des photos (Pillow) : aperçu intégré EXIF, décodage réduit, fabrication en tâche de fond pendant l'import. |
 | `notif.py` | Notifications sur le téléphone (ntfy). |
 | `maj.py` | Mise à jour automatique depuis les releases GitHub (installateur ou version portable). |
 | `test_archive.py` | Tests de bout en bout : `python -m unittest -v test_archive` |
@@ -103,6 +105,7 @@ python archive.py verifier       -m F:\ArchiveFamiliale --jeu Sauvegarde-A
 python archive.py classer        -m F:\ArchiveFamiliale --modele A [--appliquer]
 python archive.py annuler-classement -m F:\ArchiveFamiliale
 python archive.py restaurer      -m F:\ArchiveFamiliale --disque ARCHIVE-2 --vers K:\ArchiveFamiliale
+python archive.py regrouper K:\ArchiveFamiliale -m F:\ArchiveFamiliale
 python archive.py reparer-catalogue --copie G:\ArchiveFamiliale\_catalogue\catalogue-copie.sqlite --vers K:\ArchiveFamiliale
 ```
 
@@ -113,7 +116,7 @@ python archive.py reparer-catalogue --copie G:\ArchiveFamiliale\_catalogue\catal
 | `init` | Crée l'archive et son disque `ARCHIVE-1`. |
 | `option` | `--sauvegardes non` : pas de jeu de sauvegarde, par choix (l'interface n'y pousse plus). `--sauvegardes oui` pour revenir en arrière. Créer un jeu réactive aussi les sauvegardes. |
 | `ajouter-disque` | Ajoute un disque à l'archive (`ARCHIVE-n`), ou à un jeu de sauvegarde avec `--jeu` (le jeu est créé s'il n'existe pas). Le dossier doit être vide. |
-| `souvenirs` | Écrit sur chaque disque branché (archive et sauvegardes) la visionneuse « Nos souvenirs » : `_catalogue/souvenirs/` (index.html, app.js, style.css, donnees.js, vignettes `v/xx/<empreinte>.jpg`) et le lanceur « ▶ Nos souvenirs.html » à la racine du dossier de l'archive, et à la racine du disque s'il lui est dédié. Vignettes 360 px faites avec Pillow (facultatif), gardées en cache dans `_catalogue/vignettes` d'ARCHIVE-1. La page fonctionne hors ligne, en `file://`, sans rien modifier. |
+| `souvenirs` | Écrit sur chaque disque branché (archive et sauvegardes) la visionneuse « Nos souvenirs » : `_catalogue/souvenirs/` (index.html, app.js, style.css, donnees.js, vignettes `v/xx/<empreinte>.jpg`) et le lanceur « ▶ Nos souvenirs.html » à la racine du dossier de l'archive, et à la racine du disque s'il lui est dédié. Vignettes 360 px faites avec Pillow (facultatif) ; celles d'ARCHIVE-1 (`_catalogue/souvenirs/v`) servent de réserve et sont copiées sur les autres disques. La page est écrite d'abord avec les vignettes existantes (utilisable aussitôt), puis les vignettes manquantes sont faites sur plusieurs cœurs et la page réécrite. Chaque fichier porte sa catégorie de document important (`importants.py`), affichée dans la rubrique « Papiers importants ». La page fonctionne hors ligne, en `file://`, sans rien modifier. |
 | `bilan` | Ce que contient l'archive : nombre de photos, vidéos, documents… (doublons retirés), période couverte et place gagnée sur les doublons. Une date vient du contenu (si un classement l'a lue), sinon du nom du fichier, sinon de sa date de modification. |
 | `estimer` | Estimation **rapide** de ce que des disques apporteraient (noms et tailles des fichiers, comparés au catalogue et entre eux). Rien n'est lu ni enregistré ; utilisée par le bouton « Estimer la place nécessaire ». |
 | `scanner` | Calcule les empreintes **sans rien copier** (relit tout : aussi long qu'un import). Un `importer` qui suit réutilise ces empreintes. |
@@ -126,6 +129,7 @@ python archive.py reparer-catalogue --copie G:\ArchiveFamiliale\_catalogue\catal
 | `classer` | `--modele A\|B\|C` : calcule et affiche le plan de classement (simulation). Avec `--appliquer`, déplace réellement les fichiers. Tous les disques de l'archive doivent être branchés. |
 | `annuler-classement` | Remet les fichiers à leur emplacement d'avant le dernier classement. |
 | `restaurer` | Reconstruit un disque de l'archive (mort ou remplacé) à partir des jeux de sauvegarde branchés. Reprise possible. |
+| `regrouper` | Copie toute l'archive (tous les disques `ARCHIVE-n`) sur un seul disque vide, plus grand, dans l'ordre physique de chaque disque et par le même travail à la chaîne que l'import ; vérifie chaque fichier lu par son empreinte (un fichier abîmé est signalé et non copié), puis relit chaque copie. Seulement quand TOUT est copié et relu : le catalogue est copié sur le nouveau disque et mis à jour (un seul disque d'archive, même identifiant qu'`ARCHIVE-1`), le reste de `_catalogue` suit, et les anciens disques sont libérés (`volume.json` et le catalogue renommés en `…-ancien`, lanceurs « Nos souvenirs » retirés, note « ANCIENNE ARCHIVE » posée). Reprise possible à tout moment (table `regroup`, fichier `_catalogue/regroupement.json` sur le disque cible). Les jeux de sauvegarde ne changent pas. |
 | `reparer-catalogue` | `ARCHIVE-1` perdu : réinstalle le catalogue à partir d'une copie de secours, puis `restaurer --disque ARCHIVE-1`. |
 
 Codes de sortie : `0` OK · `1` problèmes (détails affichés) · `2` erreur d'utilisation ·
@@ -158,13 +162,24 @@ copié que s'il est nouveau (un fichier de moins de 64 Mo est gardé en mémoire
 L'empreinte est recalculée pendant la copie et comparée à la première.
 
 Ce qui rend l'import rapide :
-- **Travail à la chaîne** (`Writer` dans `archive.py`) : le fil principal lit l'ancien disque et
-  calcule les empreintes, un deuxième fil écrit sur l'archive, un troisième synchronise (`fsync`),
-  remet les dates et renomme les fichiers de `.partial` en nom final. Au plus 128 Mo attendent d'être
-  écrits ; ce volume est déduit de l'espace libre par l'allocateur de disques.
-- **Synchronisation par lots** : le catalogue n'est enregistré (toutes les 5 s ou 500 fichiers)
-  qu'après la fin des écritures en cours (`Archive.commit`). Une écriture qui échoue est retirée du
-  catalogue et refaite à la relance.
+- **Travail à la chaîne** (`Writer` dans `archive.py`) : un fil lit d'avance les fichiers de moins
+  de 32 Mo (`Prefetcher`, 256 Mo au plus en mémoire, dans l'ordre de traitement), le fil principal
+  calcule les empreintes et consulte le catalogue, un fil écrit sur l'archive, et 4 fils synchronisent
+  (`fsync`), remettent les dates et renomment les fichiers de `.partial` en nom final. Synchroniser
+  attend le disque : avec beaucoup de petits fichiers, c'était l'étape la plus lente ; plusieurs à la
+  fois, le disque les regroupe. Au plus 128 Mo attendent d'être écrits ; ce volume est déduit de
+  l'espace libre par l'allocateur de disques.
+- **Synchronisation par lots** : le catalogue n'est enregistré (toutes les 30 s ou 2 000 fichiers)
+  qu'après la fin des écritures en cours (`Archive.commit`), ce qui vide la chaîne : moins souvent,
+  elle reste pleine. Une écriture qui échoue est retirée du catalogue et refaite à la relance. Un
+  fichier écrit mais pas encore inscrit (coupure de courant) est remplacé à la relance, sans créer de
+  copie « (2) ».
+- **Vignettes au passage** : les photos lues d'avance sont aussi réduites en vignettes pour « Nos
+  souvenirs » (`vignettes.Background`), sur les cœurs libres du processeur, sans relecture ; si elles
+  prennent du retard, elles sont laissées pour plus tard plutôt que de ralentir l'import. Un aperçu
+  intégré à la photo (EXIF, fréquent sur les téléphones) d'au moins 300 px est pris tel quel.
+- **Où passe le temps** : à la fin de chaque import, le journal indique l'attente de la lecture, de
+  l'écriture et des enregistrements du catalogue, pour savoir quel disque freine.
 - **Ordre physique** : avant l'import, le programme demande à Windows où chaque fichier commence sur
   le disque (`FSCTL_GET_RETRIEVAL_POINTERS`, sans lire les fichiers) et les lit dans cet ordre.
   Sur un disque mécanique plein de photos, la tête de lecture avance au lieu de faire des allers-retours.
@@ -173,7 +188,9 @@ Ce qui rend l'import rapide :
   d'archive. Durée estimée affichée ; un disque sous 45 Mo/s est signalé (probablement en USB 2).
 
 Mesures sur SSD (3,8 Go de photos et vidéos) : 98 Mo/s en 2.0.0, 220 Mo/s en 2.1.0 ; petits
-fichiers : 5,3 ms puis 2,3 ms par fichier. Le catalogue pèse environ 300 octets par fichier vu
+fichiers : 5,3 ms puis 2,3 ms par fichier. En 2.7.0, sur des disques USB simulés (ouverture d'un
+fichier 8 ms, lecture 100 Mo/s, synchronisation 20 ms), 1 800 photos de 1,5 Mo : 30 puis 38 fichiers/s
+(+25 %) ; le temps restant est alors celui de la lecture de la source. Le catalogue pèse environ 300 octets par fichier vu
 (environ 300 Mo pour un million de fichiers).
 
 ## Cas particuliers gérés
