@@ -324,3 +324,9 @@ dossier n'a pas ce problème.
   lecture seule sur l'archive.
 - **Copie dans le cloud**, en plus des disques : Backblaze B2, ou `rclone`/`restic` vers un stockage
   objet.
+
+## Licence
+
+Logiciel libre sous [licence MIT](LICENSE) : chacun peut l'utiliser, le modifier et le redistribuer,
+à condition de conserver la mention de copyright. Il est fourni sans aucune garantie : gardez
+toujours au moins une copie de sauvegarde de vos fichiers.
