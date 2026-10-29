@@ -13,7 +13,7 @@ if not exist .build-venv (
     py -3 -m venv .build-venv || python -m venv .build-venv || goto :error
 )
 call .build-venv\Scripts\activate.bat || goto :error
-python -m pip install --upgrade pip pyinstaller sv-ttk qrcode || goto :error
+python -m pip install --upgrade pip pyinstaller sv-ttk qrcode pillow || goto :error
 
 echo.
 echo Tests...
@@ -28,6 +28,7 @@ pyinstaller --noconfirm --clean --onedir --windowed ^
     --name ArchiveFamiliale ^
     --workpath "%WORK%" --specpath "%WORK%" ^
     --add-data "%~dp0README.md;." ^
+    --add-data "%~dp0souvenirs_site;souvenirs_site" ^
     --collect-data sv_ttk ^
     archive_gui.py || goto :error
 if exist build rmdir /s /q build

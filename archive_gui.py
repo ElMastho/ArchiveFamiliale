@@ -37,6 +37,7 @@ import classement
 import bilan
 import maj
 import notif
+import souvenirs
 import theme
 
 APP_TITLE = "Archive Familiale"
@@ -126,6 +127,10 @@ voir son détail et ses boutons.
    place prenaient les doublons, avec une frise des photos et vidéos année par année. Il
    s'affiche tout seul à la fin d'un import. L'estimation rapide (étape 2) donne le même
    aperçu pour des disques simplement branchés, sans rien copier.
+   « Nos souvenirs » : sur chaque disque, un fichier « ▶ Nos souvenirs.html » ouvre l'archive
+   dans le navigateur (photos par année, diaporama, documents, musique, recherche), pour la
+   famille qui recevra le disque. Mis à jour à la fin de chaque import, ou avec le bouton
+   « Créer « Nos souvenirs » sur les disques ».
 
 DISQUES INTERNES D'UN PC (TOUR)
 • Les disques internes apparaissent dans la liste comme les disques USB : on peut les importer.
@@ -1183,7 +1188,9 @@ class App(tk.Tk):
         s7 = self._step(7, "Bilan : ce que contient l'archive",
                         "Tout ce qui a été trouvé sur les anciens disques, doublons retirés : combien de photos, "
                         "de vidéos, de documents… et sur quelle période.",
-                        [("Actualiser le bilan", lambda: self.refresh_summary(force=True), False, False)])
+                        [("Créer « Nos souvenirs » sur les disques", self.make_souvenirs, True, False),
+                         ("Ouvrir « Nos souvenirs »", self.open_souvenirs, True, False),
+                         ("Actualiser le bilan", lambda: self.refresh_summary(force=True), False, False)])
         both = ttk.Frame(s7, style="CardFlat.TFrame")   # tableau par type à gauche, frise à droite
         both.pack(fill="both", expand=True)
         both.columnconfigure(0, weight=5, uniform="bilan")
@@ -2267,6 +2274,13 @@ class App(tk.Tk):
 
     def _queue_end(self):
         q = self.iq
+        # Avant le bilan final : la page « Nos souvenirs » des disques est mise à jour, sans attendre
+        # que quelqu'un soit là pour fermer un message.
+        if q["copy"] and not q.get("souvenirs") and any(k != "error" for k, _, _ in q["results"]):
+            q["souvenirs"] = True
+            self.run_jobs([("Mise à jour de « Nos souvenirs »", ["souvenirs", *self._m()])],
+                          on_finish=lambda results: self._queue_end())
+            return
         self.iq = None
         self._save_queue()
         self.refresh()
@@ -2498,6 +2512,24 @@ class App(tk.Tk):
                            core.dt.datetime.now().strftime("%Y%m%d_%H%M%S"))
         self.run_jobs([("Export des listes", ["exporter", *self._m(), "--dossier", out])],
                       lambda _: self._open_path(out))
+
+    # ---------- « Nos souvenirs » ----------
+    def make_souvenirs(self):
+        def done(_):
+            if messagebox.askyesno(APP_TITLE, "« Nos souvenirs » est prêt sur les disques branchés.\n\nSur chaque "
+                                   f"disque, un double-clic sur « {souvenirs.LAUNCHER} » ouvre l'archive dans le "
+                                   "navigateur : photos par année, diaporama, documents, musique. Rien ne peut y "
+                                   "être modifié.\n\nL'ouvrir maintenant ?"):
+                self.open_souvenirs()
+        self.run_jobs([("Création de « Nos souvenirs »", ["souvenirs", *self._m()])], done)
+
+    def open_souvenirs(self):
+        page = os.path.join(self.master_path or "", souvenirs.LAUNCHER)
+        if not self.master_path or not os.path.exists(page):
+            if messagebox.askyesno(APP_TITLE, "« Nos souvenirs » n'a pas encore été créé. Le créer maintenant ?"):
+                self.make_souvenirs()
+            return
+        self._open_path(page)
 
     def open_folder(self):
         self._open_path(self.master_path)

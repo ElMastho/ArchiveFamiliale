@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Nos souvenirs</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="#/">
+    <span class="logo" aria-hidden="true">♥</span>
+    <span id="title">Nos souvenirs</span>
+  </a>
+  <nav id="nav" aria-label="Rubriques"></nav>
+  <form id="search-form" role="search">
+    <input id="search" type="search" placeholder="Rechercher un nom…" aria-label="Rechercher un fichier par son nom">
+  </form>
+</header>
+
+<main id="main">
+  <p class="empty">Chargement…</p>
+</main>
+
+<div id="viewer" class="viewer" hidden>
+  <div class="viewer-stage" id="viewer-stage"></div>
+  <button class="vbtn vclose" id="v-close" title="Fermer (Échap)" aria-label="Fermer">✕</button>
+  <button class="vbtn vprev" id="v-prev" title="Précédente (←)" aria-label="Précédente">‹</button>
+  <button class="vbtn vnext" id="v-next" title="Suivante (→)" aria-label="Suivante">›</button>
+  <div class="viewer-bar">
+    <div class="viewer-info" id="viewer-info"></div>
+    <div class="viewer-actions">
+      <button class="pill" id="v-play">▶ Diaporama</button>
+      <a class="pill" id="v-open" target="_blank" rel="noopener">Ouvrir le fichier</a>
+    </div>
+  </div>
+</div>
+
+<div id="player" class="player" hidden>
+  <div class="player-name" id="player-name"></div>
+  <audio id="audio" controls></audio>
+  <button class="vbtn small" id="player-close" aria-label="Fermer le lecteur">✕</button>
+</div>
+
+<script src="donnees.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

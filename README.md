@@ -109,6 +109,26 @@ période ; une frise des photos et vidéos année par année ; et la place que p
 
 ![Le bilan : photos, vidéos, documents et leurs périodes](docs/images/bilan.png)
 
+### Pour la famille : « Nos souvenirs » 💝
+
+Vous préparez l'archive, puis vous donnez le disque à vos parents, à vos enfants… Pour qu'ils n'aient
+pas à fouiller dans des dossiers, le programme pose sur chaque disque une petite visionneuse :
+
+- à la racine du disque, un fichier **« ▶ Nos souvenirs.html »** : un double-clic l'ouvre dans le
+  navigateur, sans rien installer, sur Windows comme sur Mac ;
+- les **photos et vidéos par année**, puis par album (« Vacances Bretagne »), avec un affichage en
+  grand, des flèches et un bouton **Diaporama** ;
+- les **documents** par type et par année (les PDF s'ouvrent directement), la **musique** à écouter,
+  et une **recherche** par nom, lieu ou année ;
+- rien ne peut être effacé ni modifié depuis cette page.
+
+Elle se met à jour toute seule à la fin de chaque import ; le bouton **« Créer « Nos souvenirs » sur les
+disques »** (étape 7) la refait à la demande, par exemple après avoir branché les disques de sauvegarde.
+
+![« Nos souvenirs » : l'accueil](docs/images/souvenirs-accueil.png)
+
+![« Nos souvenirs » : une année, rangée par album](docs/images/souvenirs-annee.png)
+
 ### Être prévenu sur son téléphone 📱
 
 Pas besoin de surveiller l'écran : le programme peut vous envoyer un message sur votre téléphone quand

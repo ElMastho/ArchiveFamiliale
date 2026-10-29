@@ -44,7 +44,7 @@ import uuid
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 
-VERSION = "2.5.2"
+VERSION = "2.6.0"
 
 ARCHIVE_FOLDER = "ArchiveFamiliale"          # nom de dossier conseillé sur chaque disque
 CATALOG_DIR = "_catalogue"
@@ -2779,6 +2779,12 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("sources", nargs="+", metavar="SOURCE", help="disques ou dossiers à estimer")
     master_opt(sp)
     sp.set_defaults(func=cmd_estimate)
+
+    sp = sub.add_parser("souvenirs", help="écrire sur chaque disque branché la page « Nos souvenirs », pour "
+                                          "consulter l'archive dans un navigateur")
+    master_opt(sp)
+    sp.add_argument("--titre", help="titre de la page (défaut : « Nos souvenirs »)")
+    sp.set_defaults(func=lambda a: __import__("souvenirs").cmd_souvenirs(a))
 
     sp = sub.add_parser("bilan", help="ce que contient l'archive : photos, vidéos, documents… et leurs périodes")
     master_opt(sp)

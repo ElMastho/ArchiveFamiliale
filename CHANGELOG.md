@@ -2,6 +2,19 @@
 
 Les notes de chaque version publiée sur GitHub sont reprises de ce fichier.
 
+## [2.6.0] - 2026-10-29
+
+### « Nos souvenirs » : consulter l'archive sans le logiciel
+- Sur chaque disque de l'archive et des sauvegardes, un fichier « ▶ Nos souvenirs.html » ouvre une
+  visionneuse dans le navigateur, sans Internet ni installation (Windows et Mac).
+- Accueil avec les chiffres clés et de grandes tuiles ; photos et vidéos par année puis par album,
+  affichage en grand avec flèches, clavier et diaporama ; documents par type et par année ; musique à
+  écouter ; recherche par nom, lieu ou année.
+- Vignettes des photos fabriquées une fois pour toutes, pour un affichage rapide même depuis un
+  disque USB.
+- Mise à jour automatique à la fin de chaque série d'imports ; bouton à l'étape 7 ; commande
+  `souvenirs`.
+
 ## [2.5.2] - 2026-10-29
 
 ### Mise en pause plus claire et plus rapide

@@ -255,6 +255,25 @@ class SingleDiskTest(Base):
         self.assertIn("3  photos", out)
         self.assertIn("doublons", out)
 
+    def test_souvenirs(self):
+        """« Nos souvenirs » : page, données, lanceur ; une image illisible n'empêche rien."""
+        import souvenirs
+        run("importer", self.src1, "-m", self.master, "-l", "Disque1")
+        rc, out = run("souvenirs", "-m", self.master, "--titre", "Les souvenirs des Martin")
+        self.assertEqual(rc, 0, out)
+        site = os.path.join(self.master, "_catalogue", "souvenirs")
+        for f in ("index.html", "app.js", "style.css", "donnees.js"):
+            self.assertTrue(os.path.exists(os.path.join(site, f)), f)
+        self.assertTrue(os.path.exists(os.path.join(self.master, souvenirs.LAUNCHER)))
+        text = open(os.path.join(site, "donnees.js"), encoding="utf-8").read()
+        data = json.loads(text[len("window.SOUVENIRS = "):].rstrip().rstrip(";"))
+        self.assertEqual(data["title"], "Les souvenirs des Martin")
+        paths = {f[0] for f in data["files"]}
+        self.assertIn("Disque1/Photos/2009/IMG_001.JPG", paths)
+        photo = next(f for f in data["files"] if f[0].endswith("IMG_001.JPG"))
+        self.assertEqual(photo[1], "photo")
+        self.assertEqual(photo[6], "")   # contenu factice : pas de vignette, mais la page reste utilisable
+
     def test_check_source(self):
         run("importer", self.src1, "-m", self.master, "-l", "Disque1")
         rc, out = run("controler", self.src1, "-m", self.master, "-l", "Disque1", "--profond")
