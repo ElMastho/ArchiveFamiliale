@@ -115,6 +115,10 @@ Pas besoin de surveiller l'écran : le programme peut vous envoyer un message su
 un disque est terminé, quand il faut brancher un nouveau disque, et quand tout est fini. C'est gratuit
 et sans compte.
 
+Les notifications sont **désactivées** tant que vous ne les avez pas activées vous-même : rien n'est
+envoyé sans votre accord. Le programme vous le propose au premier « Démarrer l'import » ; vous pouvez
+aussi les activer à tout moment :
+
 1. Sur le téléphone, installez l'application gratuite **ntfy** : Play Store (Android) ou App Store
    (iPhone), cherchez « ntfy ». À la première ouverture, acceptez les notifications.
 2. Dans Archive Familiale, cliquez sur **« Notifications… »**, en haut de la fenêtre.
@@ -122,10 +126,10 @@ et sans compte.
      s'ouvre et s'abonne tout seul.
    - **iPhone** : dans ntfy, touchez **+**, recopiez le nom affiché (par exemple `archive-k3x9…`), puis
      touchez « S'abonner ».
-3. Cliquez sur **« Envoyer un message d'essai »** : il doit arriver sur le téléphone en quelques
-   secondes.
+3. Cochez **« Activer les notifications »**, puis cliquez sur **« Envoyer un message d'essai »** : il
+   doit arriver sur le téléphone en quelques secondes.
 
-![La fenêtre « Téléphone » : un code à viser avec l'appareil photo](docs/images/telephone.png)
+![La fenêtre « Notifications » : un code à viser avec l'appareil photo](docs/images/telephone.png)
 
 > 🔒 Les messages contiennent seulement des noms de disques et des chiffres, jamais vos fichiers.
 > Ce nom est secret : ne le donnez qu'à la famille, qui peut s'abonner aussi.

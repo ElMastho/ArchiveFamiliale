@@ -2,6 +2,17 @@
 
 Les notes de chaque version publiée sur GitHub sont reprises de ce fichier.
 
+## [2.5.1] - 2026-10-29
+
+### Notifications : seulement avec votre accord
+- Les notifications sont désactivées par défaut : rien n'est envoyé à ntfy.sh tant que vous ne les
+  avez pas activées vous-même (case « Activer les notifications », décochée au départ, comme le point
+  d'avancement horaire).
+- Au premier « Démarrer l'import », le programme propose de les activer. « Oui » coche les deux cases
+  et ouvre la fenêtre pour abonner le téléphone ; « Non » n'est plus redemandé.
+- Un réglage activé automatiquement par la 2.4.0 ou la 2.5.0 n'est plus pris en compte : il faut
+  l'activer à nouveau, explicitement.
+
 ## [2.5.0] - 2026-10-29
 
 ### Le bilan : « qu'y avait-il dans tous ces disques ? »

@@ -4,6 +4,8 @@ L'utilisateur installe l'application gratuite « ntfy » et s'abonne à un « su
 tiré au hasard, propre à son archive. Le programme y publie les événements importants (disque
 importé, archive pleine, fin de la file…) : pas de compte, pas de mot de passe.
 
+Rien n'est envoyé sans l'accord explicite de l'utilisateur (case cochée dans la fenêtre
+« Notifications », ou « Oui » à la question posée au démarrage d'un import) : réglage « ntfy_accord ».
 Les messages ne contiennent que des noms de disques et des chiffres, jamais le contenu des fichiers.
 Un envoi qui échoue (pas d'Internet…) est simplement abandonné : il ne bloque jamais l'archivage.
 """
@@ -35,7 +37,7 @@ class Notifier:
 
     @property
     def enabled(self) -> bool:
-        return bool(self.cfg.get("ntfy_actif") and self.topic)
+        return bool(self.cfg.get("ntfy_accord") and self.topic)
 
     @property
     def topic(self) -> str:

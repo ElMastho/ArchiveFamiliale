@@ -153,6 +153,8 @@ CONSEILS
 ÊTRE PRÉVENU SUR SON TÉLÉPHONE
 • Bouton « Notifications… » en haut : installez l'application gratuite ntfy, visez le code avec
   l'appareil photo (Android) ou recopiez le nom affiché (iPhone), puis envoyez un message d'essai.
+• Cochez « Activer les notifications » : rien n'est envoyé sans votre accord. Le programme vous
+  le propose aussi au premier « Démarrer l'import ».
 • Vous êtes prévenu à la fin de chaque disque, quand l'archive est pleine, à la fin de tout, et
   (si vous le voulez) toutes les heures avec l'avancement.
 
@@ -714,10 +716,8 @@ class NotifyDialog(tk.Toplevel):
         super().__init__(app)
         self.app = app
         cfg = app.cfg
-        if not cfg.get("ntfy_sujet"):
+        if not cfg.get("ntfy_sujet"):   # nom tiré au hasard ; rien n'est envoyé tant qu'on n'a pas activé
             cfg["ntfy_sujet"] = notif.new_topic()
-            cfg["ntfy_actif"] = True
-            cfg.setdefault("ntfy_avancement", True)
             save_config(cfg)
         self.title("Notifications sur votre téléphone")
         self.transient(app)
@@ -772,9 +772,10 @@ class NotifyDialog(tk.Toplevel):
         self.test_lbl = ttk.Label(r3, text="", style="CardMuted.TLabel", wraplength=P(420), justify="left")
         self.test_lbl.pack(side="left", padx=(P(12), 0))
 
-        self.var_on = tk.BooleanVar(value=bool(cfg.get("ntfy_actif")))
-        self.var_hourly = tk.BooleanVar(value=bool(cfg.get("ntfy_avancement", True)))
-        ttk.Checkbutton(frm, text="Recevoir les notifications", variable=self.var_on,
+        self.var_on = tk.BooleanVar(value=bool(cfg.get("ntfy_accord")))
+        self.var_hourly = tk.BooleanVar(value=bool(cfg.get("ntfy_avancement")))
+        ttk.Checkbutton(frm, text="Activer les notifications (rien n'est envoyé tant que cette case n'est pas "
+                                  "cochée)", variable=self.var_on,
                         command=self._save).pack(anchor="w", pady=(P(6), 0))
         ttk.Checkbutton(frm, text="Recevoir aussi un point d'avancement toutes les heures",
                         variable=self.var_hourly, command=self._save).pack(anchor="w", pady=(P(4), 0))
@@ -804,19 +805,20 @@ class NotifyDialog(tk.Toplevel):
         return img
 
     def _save(self):
-        self.app.cfg.update(ntfy_actif=self.var_on.get(), ntfy_avancement=self.var_hourly.get())
+        self.app.cfg.update(ntfy_accord=self.var_on.get(), ntfy_avancement=self.var_hourly.get())
         save_config(self.app.cfg)
 
     def _test(self):
+        if not self.var_on.get():   # rien ne part sans accord explicite
+            self.test_lbl.configure(text="Cochez d'abord « Activer les notifications », ci-dessous.")
+            return
         self.test_lbl.configure(text="Envoi…")
         self.update_idletasks()
         err = self.app.notifier.send("Archive Familiale", "Message d'essai : les notifications fonctionnent. "
-                                     "Vous serez prévenu ici.", tags=("white_check_mark",), force=True, wait=True)
+                                     "Vous serez prévenu ici.", tags=("white_check_mark",), wait=True)
         if err:
             self.test_lbl.configure(text=f"Échec de l'envoi : vérifiez la connexion Internet de l'ordinateur ({err}).")
         else:
-            self.var_on.set(True)
-            self._save()
             self.test_lbl.configure(text="Envoyé ! Le message doit arriver sur le téléphone dans quelques secondes. "
                                          "Sinon, reprenez l'étape 2.")
 
@@ -1791,7 +1793,7 @@ class App(tk.Tk):
                             self.progress.configure(mode="determinate")
                         self.progress["value"] = frac * 1000
                     self.lbl_status.configure(text=self._queue_status(frac, text))
-                    if (self.busy and self.cfg.get("ntfy_avancement", True)
+                    if (self.busy and self.cfg.get("ntfy_avancement")
                             and time.monotonic() - self.notified_at > 3600):
                         self.notified_at = time.monotonic()
                         self.notifier.send("Toujours en cours", self.lbl_status.cget("text"), priority=2,
@@ -2142,6 +2144,8 @@ class App(tk.Tk):
         q = self.iq
         if not q or not q["items"] or self.busy:
             return
+        if q["paused"] == "attente" and not self._offer_notifications():
+            return
         if q["paused"] == "attente":   # les disques déjà commencés d'abord, ceux déjà terminés à la fin
             order = {"commencé": 0, "nouveau": 1, "terminé": 2}
             q["items"].sort(key=lambda it: order[self._plan_state(it)])
@@ -2151,6 +2155,30 @@ class App(tk.Tk):
 
     def resume_queue(self):
         self.start_import()
+
+    def _offer_notifications(self) -> bool:
+        """Au premier « Démarrer l'import », propose d'être prévenu sur le téléphone. Rien n'est envoyé
+        sans un « Oui » explicite ; un « Non » n'est plus redemandé (bouton « Notifications… » pour
+        changer d'avis). Renvoie False si l'utilisateur annule le démarrage."""
+        if self.notifier.enabled or self.cfg.get("ntfy_propose"):
+            return True
+        answer = messagebox.askyesnocancel(
+            APP_TITLE, "L'import va durer longtemps. Voulez-vous être prévenu sur votre téléphone (fin de "
+            "chaque disque, archive pleine, fin de l'import) ?\n\nIl faut l'application gratuite « ntfy ». "
+            "Les messages contiennent seulement des noms de disques et des chiffres, et passent par le "
+            "service ntfy.sh.\n\nOui : je règle le téléphone maintenant.\nNon : sans notifications (vous "
+            "pourrez changer d'avis avec le bouton « Notifications… »).")
+        if answer is None:
+            return False
+        self.cfg["ntfy_propose"] = True
+        if answer:
+            self.cfg.update(ntfy_accord=True, ntfy_avancement=True)
+            save_config(self.cfg)
+            dlg = NotifyDialog(self)
+            self.wait_window(dlg)
+        else:
+            save_config(self.cfg)
+        return True
 
     def remove_planned(self):
         q = self.iq

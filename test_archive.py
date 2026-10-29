@@ -762,6 +762,7 @@ class GuiTest(Base):
             app.destroy()
             archive.volume_free = free
             app = self.open_app(keep_config=True)
+            mb.askyesnocancel.return_value = False
             self.assertEqual(app.iq["paused"], "attente")
             self.assertEqual([it["label"] for it in app.iq["items"]], ["Disque1", "Disque2"])
             self.assertEqual(app.hero_btn.cget("text"), "Démarrer l'import")
@@ -792,7 +793,13 @@ class GuiTest(Base):
         self.assertEqual(app.hero_btn.cget("text"), "Démarrer l'import")
         self.assertEqual(str(app.btn_start.cget("state")), "normal")
         with mock.patch.object(archive_gui, "messagebox") as mb:
+            mb.askyesnocancel.return_value = None     # « Annuler » à la question des notifications
             app.start_import()
+            self.assertFalse(app.busy)
+            mb.askyesnocancel.return_value = False    # « Non » : on démarre, sans notifications
+            app.start_import()
+            self.assertTrue(app.cfg["ntfy_propose"])
+            self.assertFalse(app.notifier.enabled)
             end = time.monotonic() + 30
             while app.iq is not None or app.busy:
                 self.assertLess(time.monotonic(), end)
@@ -850,7 +857,10 @@ class GuiTest(Base):
 class NotifTest(unittest.TestCase):
     def test_send_and_links(self):
         from unittest import mock
-        cfg = {"ntfy_sujet": notif.new_topic(), "ntfy_actif": True}
+        cfg = {"ntfy_sujet": notif.new_topic(), "ntfy_actif": True}   # réglage d'avant la 2.5.1 : ignoré
+        n = notif.Notifier(cfg)
+        self.assertFalse(n.enabled)
+        cfg["ntfy_accord"] = True
         n = notif.Notifier(cfg)
         self.assertRegex(n.topic, r"^archive-[a-z2-9]{12}$")
         self.assertEqual(n.app_link(), f"ntfy://ntfy.sh/{n.topic}?display=Archive+Familiale")
@@ -869,7 +879,7 @@ class NotifTest(unittest.TestCase):
 
         with mock.patch("urllib.request.urlopen", urlopen):
             self.assertIsNone(n.send("Titre", "Disque « é » terminé", tags=("tada",), wait=True))
-            cfg["ntfy_actif"] = False
+            cfg["ntfy_accord"] = False
             n.send("Rien", "désactivé", wait=True)
         self.assertEqual(sent, [{"topic": n.topic, "title": "Titre", "message": "Disque « é » terminé",
                                  "priority": 3, "tags": ["tada"]}])

@@ -235,7 +235,9 @@ fichiers : 5,3 ms puis 2,3 ms par fichier. Le catalogue pèse environ 300 octets
 - Refus des doubles lectures dans `SourcesDialog` : le même disque (numéro de série) sous un autre nom,
   deux chemins cochés l'un dans l'autre ; avertissement pour un dossier d'un disque déjà importé en
   entier. Les disques de l'archive et des sauvegardes sont grisés.
-- **Notifications** (`notif.py`) : publication JSON sur `https://ntfy.sh` (configurable :
+- **Notifications** (`notif.py`) : désactivées par défaut. Rien n'est envoyé sans accord explicite
+  (`ntfy_accord`) : case cochée dans la fenêtre « Notifications », ou « Oui » à la question posée une
+  seule fois au premier « Démarrer l'import » (`ntfy_propose`). Publication JSON sur `https://ntfy.sh` (configurable :
   `ntfy_serveur`), sujet secret aléatoire `archive-xxxxxxxxxxxx` (`ntfy_sujet`), en arrière-plan,
   sans jamais bloquer. Envoyées : fin de chaque disque de la file (bilan chiffré `LAST_RUN`), archive
   pleine (priorité 5), fin de la file, fin de toute opération de plus de 10 minutes, point
