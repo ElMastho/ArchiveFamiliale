@@ -613,6 +613,9 @@ class GuiTest(Base):
         os.environ["APPDATA"] = os.path.join(self.tmp, "appdata")
         write(os.path.join(self.tmp, "appdata", "ArchiveFamiliale", "config.json"),
               json.dumps({"master": self.master, "verifier_maj": False}).encode())
+        low = archive_gui.LOW_SPACE   # la place libre réelle de la machine ne doit pas changer l'étape conseillée
+        archive_gui.LOW_SPACE = 0
+        self.addCleanup(setattr, archive_gui, "LOW_SPACE", low)
         try:
             app = archive_gui.App()
         except tk.TclError as e:   # pas d'écran (serveur sans bureau)
