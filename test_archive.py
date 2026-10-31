@@ -1091,6 +1091,89 @@ class GuiTest(Base):
         self.assertEqual(app.hero_title.cget("text"), "Créer votre archive")
 
 
+class ProgressTest(unittest.TestCase):
+    """Temps restant : fenêtre glissante et modèle « coût par fichier + coût par octet »."""
+    PER_FILE = 0.05             # s par fichier (ouverture, catalogue…)
+    SPEED = 100 * KB * KB       # octets/s en lecture pure
+
+    def setUp(self):
+        self.clock = 1000.0
+        real = archive.time.monotonic
+        archive.time.monotonic = lambda: self.clock
+        self.addCleanup(setattr, archive.time, "monotonic", real)
+        hook = archive.Progress.hook
+        archive.Progress.hook = None
+        self.addCleanup(setattr, archive.Progress, "hook", hook)
+        self.err = io.StringIO()
+        ctx = contextlib.redirect_stderr(self.err)
+        ctx.__enter__()
+        self.addCleanup(ctx.__exit__, None, None, None)
+
+    def process(self, p, size, skipped=False):
+        if skipped:
+            p.skip(size)
+        else:
+            left = size
+            while left:
+                chunk = min(left, 8 * KB * KB)
+                self.clock += chunk / self.SPEED
+                p.add(chunk)
+                p.estimate()
+                left -= chunk
+            self.clock += self.PER_FILE
+        p.file_done(size)
+        p.estimate()
+
+    def truth(self, sizes):
+        return len(sizes) * self.PER_FILE + sum(sizes) / self.SPEED
+
+    def test_mix_change(self):
+        """Des vidéos et des photos, puis il ne reste que des photos : l'estimation reste juste."""
+        import random
+        rnd = random.Random(1)
+        done = [rnd.choice([3 * KB * KB, 4 * KB * KB, 400 * KB * KB]) for _ in range(1500)]
+        rest = [rnd.choice([2 * KB * KB, 3 * KB * KB]) for _ in range(20000)]
+        p = archive.Progress(len(done) + len(rest), sum(done) + sum(rest))
+        for size in done:
+            self.process(p, size)
+        _, _, eta = p.estimate()
+        self.assertAlmostEqual(eta, self.truth(rest), delta=0.1 * self.truth(rest))
+
+    def test_same_size_files(self):
+        """Fichiers tous de même taille : on ne peut pas séparer les coûts, le débit simple suffit."""
+        size = 5 * KB * KB
+        p = archive.Progress(5000, 5000 * size)
+        for _ in range(2000):
+            self.process(p, size)
+        rate, _, eta = p.estimate()
+        self.assertIsNotNone(rate)
+        self.assertAlmostEqual(eta, self.truth([size] * 3000), delta=0.05 * self.truth([size] * 3000))
+
+    def test_recent_speed(self):
+        """Le débit change : l'estimation suit les dernières minutes, pas la moyenne depuis le début."""
+        size = 500 * KB * KB
+        p = archive.Progress(600, 600 * size)
+        self.SPEED //= 4
+        for _ in range(100):        # ~33 min au ralenti
+            self.process(p, size)
+        self.SPEED *= 4
+        for _ in range(300):        # ~25 min à pleine vitesse : plus que la fenêtre
+            self.process(p, size)
+        _, _, eta = p.estimate()
+        self.assertAlmostEqual(eta, self.truth([size] * 200), delta=0.05 * self.truth([size] * 200))
+
+    def test_skipped_files_ignored(self):
+        """Reprise : les fichiers déjà traités, sautés en un instant, ne gonflent pas le débit."""
+        size = 50 * KB * KB
+        p = archive.Progress(400, 400 * size)
+        for _ in range(200):
+            self.process(p, size, skipped=True)
+        for _ in range(20):
+            self.process(p, size)
+        _, _, eta = p.estimate()
+        self.assertAlmostEqual(eta, self.truth([size] * 180), delta=0.05 * self.truth([size] * 180))
+
+
 class NotifTest(unittest.TestCase):
     def test_send_and_links(self):
         from unittest import mock

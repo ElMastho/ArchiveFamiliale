@@ -24,6 +24,7 @@ Bibliothèque standard de Python uniquement (3.10+). Voir README.md.
 from __future__ import annotations
 
 import argparse
+import collections
 import contextlib
 import csv
 import ctypes
@@ -44,7 +45,7 @@ import uuid
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 
-VERSION = "2.7.1"
+VERSION = "2.7.2"
 
 ARCHIVE_FOLDER = "ArchiveFamiliale"          # nom de dossier conseillé sur chaque disque
 CATALOG_DIR = "_catalogue"
@@ -309,20 +310,35 @@ def ns_to_iso(ns) -> str:
 
 
 class Progress:
-    """Ligne de progression : pourcentage, débit, temps restant estimé."""
+    """Ligne de progression : pourcentage, débit, temps restant estimé.
 
-    # Si défini (interface graphique) : hook(fraction 0..1 ou None, texte) remplace la console.
+    Le temps restant est estimé sur les dernières minutes (fenêtre glissante) et non sur la moyenne
+    depuis le début, qui traîne des heures derrière la réalité quand le débit change. Il suit le
+    modèle : temps = fichiers × coût fixe par fichier + octets ÷ vitesse de lecture. Les deux
+    paramètres sont ajustés sur la fenêtre (moindres carrés) : l'estimation reste juste quand le
+    mélange change (vidéos puis petites photos…). Si la fenêtre ne permet pas de les distinguer
+    (fichiers tous de même taille…), on revient au débit simple. Les fichiers déjà traités lors
+    d'une session précédente (sautés en un instant) sont exclus de la mesure."""
+
+    # Si défini (interface graphique) : hook(fraction 0..1 ou None, texte, débit en octets/s ou None,
+    # temps restant en s ou None) remplace la console.
     hook = None
+    WINDOW = 20 * 60.0      # durée de la fenêtre glissante (s)
+    SAMPLE = 5.0            # un échantillon toutes les 5 s au plus
 
     def __init__(self, total_files: int, total_bytes: int):
         self.total_files = total_files
         self.total_bytes = total_bytes
         self.files = 0
         self.done_bytes = 0
+        self.skipped_bytes = 0
+        self.skipped_files = 0
         self.cur = 0
         self.read_bytes = 0
         self.t0 = time.monotonic()
         self.last = 0.0
+        # (instant, octets traités utiles, octets lus, fichiers traités utiles)
+        self.samples = collections.deque([(self.t0, 0, 0, 0)])
         self.tty = _isatty(sys.stderr)
         self.interval = 0.2 if Progress.hook else (0.5 if self.tty else 30.0)
 
@@ -332,6 +348,11 @@ class Progress:
         self.cur += n
         self._tick()
 
+    def skip(self, size: int):
+        """Fichier déjà traité auparavant : compte dans l'avancement, pas dans la mesure du débit."""
+        self.skipped_bytes += size
+        self.skipped_files += 1
+
     def file_done(self, size: int):
         check_cancel()
         self.files += 1
@@ -339,20 +360,71 @@ class Progress:
         self.cur = 0
         self._tick()
 
+    def _sample(self, now):
+        useful = min(self.done_bytes + self.cur, self.total_bytes) - self.skipped_bytes
+        s = self.samples
+        if now - s[-1][0] >= self.SAMPLE:
+            s.append((now, useful, self.read_bytes, self.files - self.skipped_files))
+        while len(s) > 2 and s[1][0] <= now - self.WINDOW:
+            s.popleft()
+        return useful
+
+    def _model(self):
+        """(coût par fichier en s, coût par octet en s) ajustés sur la fenêtre, ou None si indistinguables."""
+        s = list(self.samples)
+        sff = sbb = sfb = stf = stb = 0.0
+        for (t1, b1, _, f1), (t2, b2, _, f2) in zip(s, s[1:]):
+            dt, db, df = t2 - t1, max(b2 - b1, 0), max(f2 - f1, 0)
+            sff += df * df
+            sbb += db * db
+            sfb += df * db
+            stf += dt * df
+            stb += dt * db
+        det = sff * sbb - sfb * sfb
+        # Fichiers et octets avancent en proportion fixe : on ne peut pas séparer les deux coûts.
+        if sff <= 0 or sbb <= 0 or det <= 0.02 * sff * sbb:
+            return None
+        per_file = (stf * sbb - stb * sfb) / det
+        per_byte = (stb * sff - stf * sfb) / det
+        if per_file < 0 or per_byte <= 0:
+            return None
+        return per_file, per_byte
+
+    def estimate(self, now=None):
+        """(débit de traitement en octets/s, débit de lecture en octets/s, temps restant en s), chacun
+        pouvant valoir None, mesurés sur la fenêtre récente."""
+        now = time.monotonic() if now is None else now
+        useful = self._sample(now)
+        t, u, r, _ = self.samples[0]
+        span = now - t
+        if span < 1.0:
+            return None, None, None
+        rate = max(useful - u, 0) / span
+        read_rate = max(self.read_bytes - r, 0) / span
+        left_bytes = self.total_bytes - min(self.done_bytes + self.cur, self.total_bytes)
+        left_files = max(self.total_files - self.files, 0)
+        model = self._model()
+        if model:
+            per_file, per_byte = model
+            # le fichier en cours compte dans left_files ; ses octets déjà lus sont hors de left_bytes
+            eta = left_files * per_file + left_bytes * per_byte
+        else:
+            eta = left_bytes / rate if rate else None
+        return rate, read_rate, eta
+
     def _tick(self, force=False):
         now = time.monotonic()
         if not force and now - self.last < self.interval:
             return
         self.last = now
-        elapsed = max(now - self.t0, 1e-6)
         done = min(self.done_bytes + self.cur, self.total_bytes)
         pct = 100.0 * done / self.total_bytes if self.total_bytes else 100.0
-        eta = (self.total_bytes - done) * elapsed / done if done > 0 else None
+        rate, read_rate, eta = self.estimate(now)
         line = (f"  {pct:5.1f} %  {fmt_int(self.files)}/{fmt_int(self.total_files)} fichiers"
                 f"  {fmt_size(done)}/{fmt_size(self.total_bytes)}"
-                f"  lecture {fmt_size(self.read_bytes / elapsed)}/s  reste ~{fmt_duration(eta)}")
+                f"  lecture {fmt_size(read_rate or 0)}/s  reste ~{fmt_duration(eta)}")
         if Progress.hook:
-            Progress.hook(pct / 100.0, line.strip())
+            Progress.hook(pct / 100.0, line.strip(), rate, eta)
             return
         if self.tty:
             sys.stderr.write("\r" + line.ljust(110)[:150])
@@ -2051,6 +2123,7 @@ def _process_entry(ar: Archive, label: str, root: str, e: Entry, copy: bool,
     if unchanged and row["status"] in ("copied", "duplicate") and row["stored_path"] \
             and ar.stored_row(row["stored_path"]) is not None:
         st.already += 1
+        progress.skip(e.size)
         return
     known_hash = row["hash"] if unchanged else None
     src = os.path.join(root, to_os(e.rel))
