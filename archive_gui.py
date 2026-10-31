@@ -1022,7 +1022,7 @@ class App(tk.Tk):
         self.notified_at = 0.0   # dernier point d'avancement envoyé sur le téléphone
         self.q: queue.Queue = queue.Queue()
         self.action_buttons: list[ttk.Button] = []
-        core.Progress.hook = lambda frac, text, rate=None: self.q.put(("progress", frac, text, rate))
+        core.Progress.hook = lambda frac, text, rate=None, eta=None: self.q.put(("progress", frac, text, rate, eta))
 
         theme.apply(self)
         self._build()
@@ -1872,7 +1872,7 @@ class App(tk.Tk):
                             APP_TITLE, "Un disque est lent : il est sans doute branché en USB 2.\n\n"
                             + next((l.strip(" ⚠") for l in t.splitlines() if "USB 2" in l), "")))
                 elif kind == "progress":
-                    _, frac, text, rate = msg
+                    _, frac, text, rate, eta = msg
                     if frac is None:
                         if str(self.progress["mode"]) != "indeterminate":
                             self.progress.configure(mode="indeterminate")
@@ -1882,7 +1882,7 @@ class App(tk.Tk):
                             self.progress.stop()
                             self.progress.configure(mode="determinate")
                         self.progress["value"] = frac * 1000
-                    self.lbl_status.configure(text=self._queue_status(frac, text, rate))
+                    self.lbl_status.configure(text=self._queue_status(frac, text, rate, eta))
                     if (self.busy and self.cfg.get("ntfy_avancement")
                             and time.monotonic() - self.notified_at > 3600):
                         self.notified_at = time.monotonic()
@@ -2186,19 +2186,20 @@ class App(tk.Tk):
         title = f"{verb} de « {item['label']} »" + (f" — disque {pos} sur {q['n']}" if q["n"] > 1 else "")
         self.run_jobs([(title, argv)], on_finish=self._queue_step_done)
 
-    def _queue_status(self, frac, text, rate=None):
+    def _queue_status(self, frac, text, rate=None, eta=None):
         """Texte de progression, précédé de la position dans la file et du temps restant pour l'ensemble.
 
         Le temps restant pour l'ensemble = reste du disque en cours + disques suivants, au débit récent
-        du disque en cours : il ne peut donc jamais être inférieur au « reste » du disque en cours."""
+        du disque en cours (leur nombre de fichiers n'est pas connu d'avance) : il ne peut donc jamais
+        être inférieur au « reste » du disque en cours."""
         q = self.iq
         if not q or not q["current"] or q["n"] < 2:
             return text
         pos = q["n"] - len(q["items"]) + 1
         head = f"Disque {pos} sur {q['n']}"
         sizes = [it["size"] for it in q["items"]]
-        if frac is not None and rate and None not in sizes:
-            left = ((1.0 - frac) * sizes[0] + sum(sizes[1:])) / rate
+        if frac is not None and rate and eta is not None and None not in sizes[1:]:
+            left = eta + sum(sizes[1:]) / rate
             head += f" (ensemble : encore ≈ {core.fmt_duration(left)})"
         return f"{head} · {text}"
 

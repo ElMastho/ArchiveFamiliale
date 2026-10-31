@@ -8,6 +8,10 @@ Les notes de chaque version publiée sur GitHub sont reprises de ce fichier.
 - Le « reste » et le débit de lecture sont calculés sur les 20 dernières minutes, et non plus sur la
   moyenne depuis le début : quand le débit change (petites photos puis grosses vidéos), l'estimation
   ne traîne plus des heures derrière la réalité.
+- Le temps restant tient compte du nombre de fichiers, pas seulement de leur taille : le programme
+  mesure le temps fixe par fichier et la vitesse de lecture pure, puis les applique aux fichiers qui
+  restent. L'estimation reste juste quand il ne reste que des petites photos après des vidéos (ou
+  l'inverse).
 - Les fichiers déjà traités lors d'une session précédente (reprise) ne faussent plus le débit.
 - File de plusieurs disques : le temps restant pour l'ensemble = reste du disque en cours + disques
   suivants au même débit. Il ne peut plus être inférieur au reste du disque en cours.
