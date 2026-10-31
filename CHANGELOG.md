@@ -2,6 +2,16 @@
 
 Les notes de chaque version publiée sur GitHub sont reprises de ce fichier.
 
+## [Non publié]
+
+### Temps restants plus justes
+- Le « reste » et le débit de lecture sont calculés sur les 20 dernières minutes, et non plus sur la
+  moyenne depuis le début : quand le débit change (petites photos puis grosses vidéos), l'estimation
+  ne traîne plus des heures derrière la réalité.
+- Les fichiers déjà traités lors d'une session précédente (reprise) ne faussent plus le débit.
+- File de plusieurs disques : le temps restant pour l'ensemble = reste du disque en cours + disques
+  suivants au même débit. Il ne peut plus être inférieur au reste du disque en cours.
+
 ## [2.7.1] - 2026-10-29
 
 ### Documents importants

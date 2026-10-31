@@ -24,6 +24,7 @@ Bibliothèque standard de Python uniquement (3.10+). Voir README.md.
 from __future__ import annotations
 
 import argparse
+import collections
 import contextlib
 import csv
 import ctypes
@@ -309,20 +310,30 @@ def ns_to_iso(ns) -> str:
 
 
 class Progress:
-    """Ligne de progression : pourcentage, débit, temps restant estimé."""
+    """Ligne de progression : pourcentage, débit, temps restant estimé.
 
-    # Si défini (interface graphique) : hook(fraction 0..1 ou None, texte) remplace la console.
+    Le débit et le temps restant sont calculés sur les dernières minutes (fenêtre glissante) et non
+    sur la moyenne depuis le début : le débit varie beaucoup selon la taille des fichiers (photos
+    puis vidéos…), et une moyenne globale traîne des heures derrière la réalité. Les fichiers déjà
+    traités lors d'une session précédente (sautés en un instant) sont exclus du débit."""
+
+    # Si défini (interface graphique) : hook(fraction 0..1 ou None, texte, débit en octets/s ou None)
+    # remplace la console.
     hook = None
+    WINDOW = 20 * 60.0      # durée de la fenêtre glissante (s)
+    SAMPLE = 5.0            # un échantillon toutes les 5 s au plus
 
     def __init__(self, total_files: int, total_bytes: int):
         self.total_files = total_files
         self.total_bytes = total_bytes
         self.files = 0
         self.done_bytes = 0
+        self.skipped_bytes = 0
         self.cur = 0
         self.read_bytes = 0
         self.t0 = time.monotonic()
         self.last = 0.0
+        self.samples = collections.deque([(self.t0, 0, 0)])   # (instant, octets traités utiles, lus)
         self.tty = _isatty(sys.stderr)
         self.interval = 0.2 if Progress.hook else (0.5 if self.tty else 30.0)
 
@@ -332,6 +343,10 @@ class Progress:
         self.cur += n
         self._tick()
 
+    def skip(self, size: int):
+        """Fichier déjà traité auparavant : compte dans l'avancement, pas dans le débit."""
+        self.skipped_bytes += size
+
     def file_done(self, size: int):
         check_cancel()
         self.files += 1
@@ -339,20 +354,35 @@ class Progress:
         self.cur = 0
         self._tick()
 
+    def rates(self, now=None):
+        """(débit de traitement, débit de lecture) en octets/s sur la fenêtre récente, ou (None, None)."""
+        now = time.monotonic() if now is None else now
+        useful = min(self.done_bytes + self.cur, self.total_bytes) - self.skipped_bytes
+        s = self.samples
+        if now - s[-1][0] >= self.SAMPLE:
+            s.append((now, useful, self.read_bytes))
+        while len(s) > 2 and s[1][0] <= now - self.WINDOW:
+            s.popleft()
+        t, u, r = s[0]
+        span = now - t
+        if span < 1.0:
+            return None, None
+        return max(useful - u, 0) / span, max(self.read_bytes - r, 0) / span
+
     def _tick(self, force=False):
         now = time.monotonic()
         if not force and now - self.last < self.interval:
             return
         self.last = now
-        elapsed = max(now - self.t0, 1e-6)
         done = min(self.done_bytes + self.cur, self.total_bytes)
         pct = 100.0 * done / self.total_bytes if self.total_bytes else 100.0
-        eta = (self.total_bytes - done) * elapsed / done if done > 0 else None
+        rate, read_rate = self.rates(now)
+        eta = (self.total_bytes - done) / rate if rate else None
         line = (f"  {pct:5.1f} %  {fmt_int(self.files)}/{fmt_int(self.total_files)} fichiers"
                 f"  {fmt_size(done)}/{fmt_size(self.total_bytes)}"
-                f"  lecture {fmt_size(self.read_bytes / elapsed)}/s  reste ~{fmt_duration(eta)}")
+                f"  lecture {fmt_size(read_rate or 0)}/s  reste ~{fmt_duration(eta)}")
         if Progress.hook:
-            Progress.hook(pct / 100.0, line.strip())
+            Progress.hook(pct / 100.0, line.strip(), rate)
             return
         if self.tty:
             sys.stderr.write("\r" + line.ljust(110)[:150])
@@ -2051,6 +2081,7 @@ def _process_entry(ar: Archive, label: str, root: str, e: Entry, copy: bool,
     if unchanged and row["status"] in ("copied", "duplicate") and row["stored_path"] \
             and ar.stored_row(row["stored_path"]) is not None:
         st.already += 1
+        progress.skip(e.size)
         return
     known_hash = row["hash"] if unchanged else None
     src = os.path.join(root, to_os(e.rel))
