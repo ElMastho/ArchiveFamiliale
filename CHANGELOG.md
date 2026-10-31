@@ -2,7 +2,7 @@
 
 Les notes de chaque version publiée sur GitHub sont reprises de ce fichier.
 
-## [Non publié]
+## [2.7.2] - 2026-10-31
 
 ### Temps restants plus justes
 - Le « reste » et le débit de lecture sont calculés sur les 20 dernières minutes, et non plus sur la
