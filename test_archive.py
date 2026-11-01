@@ -1162,6 +1162,18 @@ class ProgressTest(unittest.TestCase):
         _, _, eta = p.estimate()
         self.assertAlmostEqual(eta, self.truth([size] * 200), delta=0.05 * self.truth([size] * 200))
 
+    def test_read_rate_shown_only_when_measured(self):
+        """« lecture » n'apparaît que si l'étape compte ce qu'elle lit (sinon : « 0 o/s » trompeur)."""
+        lines = []
+        archive.Progress.hook = lambda frac, text, rate=None, eta=None: lines.append(text)
+        p = archive.Progress(2, 2 * KB)
+        self.clock += 10
+        p.file_done(KB)
+        self.assertNotIn("lecture", lines[-1])
+        self.clock += 10
+        p.add(KB)
+        self.assertIn("lecture", lines[-1])
+
     def test_skipped_files_ignored(self):
         """Reprise : les fichiers déjà traités, sautés en un instant, ne gonflent pas le débit."""
         size = 50 * KB * KB

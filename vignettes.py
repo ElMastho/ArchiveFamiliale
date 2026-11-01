@@ -155,16 +155,30 @@ def _decode(fp, dst: str):
 
 def make_from_file(src: str, dst: str) -> bool:
     """Vignette d'une photo sur disque ; False si impossible (format, image abîmée, Pillow absent)."""
+    return make_from_file_counted(src, dst)[0]
+
+
+def make_from_file_counted(src: str, dst: str, size: int | None = None) -> tuple[bool, int]:
+    """Comme make_from_file, et renvoie aussi le nombre d'octets lus (environ : une photo décodée
+    compte pour sa taille entière), pour afficher un débit de lecture."""
+    if size is None:
+        try:
+            size = os.path.getsize(src)
+        except OSError:
+            size = 0
+    read = 0
     try:
         if ext_of(src) in JPEG_EXTS:
             with open(src, "rb") as f:
                 head = f.read(HEAD_BYTES)
+            read = len(head)
             if _from_preview(head, dst):
-                return True
+                return True, read
+        read = size
         _decode(src, dst)
-        return True
+        return True, read
     except Exception:   # format non reconnu, image abîmée… : la page affichera une icône
-        return False
+        return False, read
 
 
 def make_from_bytes(data: bytes, name: str, dst: str) -> bool:

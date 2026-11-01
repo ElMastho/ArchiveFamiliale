@@ -422,7 +422,8 @@ class Progress:
         rate, read_rate, eta = self.estimate(now)
         line = (f"  {pct:5.1f} %  {fmt_int(self.files)}/{fmt_int(self.total_files)} fichiers"
                 f"  {fmt_size(done)}/{fmt_size(self.total_bytes)}"
-                f"  lecture {fmt_size(read_rate or 0)}/s  reste ~{fmt_duration(eta)}")
+                + (f"  lecture {fmt_size(read_rate or 0)}/s" if self.read_bytes else "")
+                + f"  reste ~{fmt_duration(eta)}")
         if Progress.hook:
             Progress.hook(pct / 100.0, line.strip(), rate, eta)
             return

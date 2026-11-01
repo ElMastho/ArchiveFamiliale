@@ -199,15 +199,17 @@ def _make_thumbs(todo: dict, vcache: str, have: set) -> int:
                             break
                         h, (src, size) = nxt
                         dst = core.lp(os.path.join(vcache, h[:2], h + ".jpg"))
-                        pending[ex.submit(vignettes.make_from_file, core.lp(src), dst)] = (h, size)
+                        pending[ex.submit(vignettes.make_from_file_counted, core.lp(src), dst, size)] = (h, size)
                     if not pending:
                         break
                     done, _ = wait(pending, timeout=0.5, return_when=FIRST_COMPLETED)
                     for fut in done:
                         h, size = pending.pop(fut)
-                        if fut.result():
+                        ok, read = fut.result()
+                        if ok:
                             have.add(h)
                             made += 1
+                        progress.add(read)   # compté ici et non dans les threads de vignettes : Progress n'est pas partagé
                         progress.file_done(size)
                     core.check_cancel()
             except KeyboardInterrupt:
