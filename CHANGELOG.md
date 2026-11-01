@@ -2,7 +2,7 @@
 
 Les notes de chaque version publiée sur GitHub sont reprises de ce fichier.
 
-## [Non publié]
+## [2.7.3] - 2026-11-01
 
 ### Notifications plus claires
 - « Toujours en cours » indique l'étape en cours (par exemple « Mise à jour de « Nos souvenirs » »).
