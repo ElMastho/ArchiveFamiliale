@@ -1018,6 +1018,7 @@ class App(tk.Tk):
         self.notifier = notif.Notifier(self.cfg)
         self.job_t0 = 0.0
         self.job_title = ""
+        self.step_title = ""   # titre de l'étape en cours (une opération peut en enchaîner plusieurs)
         self.pause_overlay = None
         self.notified_at = 0.0   # dernier point d'avancement envoyé sur le téléphone
         self.q: queue.Queue = queue.Queue()
@@ -1827,6 +1828,7 @@ class App(tk.Tk):
         if not self.iq:
             self.notified_at = self.job_t0
         self.job_title = jobs[0][0] if jobs else ""
+        self.step_title = ""
         self._update_steps()   # la carte « Prochaine étape » montre l'opération en cours
         core.CANCEL.clear()
         self._update_buttons()
@@ -1886,9 +1888,12 @@ class App(tk.Tk):
                     if (self.busy and self.cfg.get("ntfy_avancement")
                             and time.monotonic() - self.notified_at > 3600):
                         self.notified_at = time.monotonic()
-                        self.notifier.send("Toujours en cours", self.lbl_status.cget("text"), priority=2,
+                        step = self.step_title or self.job_title
+                        self.notifier.send(f"Toujours en cours : {step}" if step else "Toujours en cours",
+                                           self.lbl_status.cget("text"), priority=2,
                                            tags=("hourglass_flowing_sand",))
                 elif kind == "start":
+                    self.step_title = msg[1]
                     self.log(f"\n━━━ {msg[1]} ━━━\n")
                     self.lbl_status.configure(text=msg[1] + "…")
                     self.progress.stop()

@@ -2,6 +2,13 @@
 
 Les notes de chaque version publiée sur GitHub sont reprises de ce fichier.
 
+## [2.7.3] - 2026-11-01
+
+### Notifications plus claires
+- « Toujours en cours » indique l'étape en cours (par exemple « Mise à jour de « Nos souvenirs » »).
+- Vignettes de « Nos souvenirs » : le débit de lecture est mesuré (il affichait « 0 o/s »). Une étape
+  qui ne mesure pas ce qu'elle lit n'affiche plus de débit de lecture.
+
 ## [2.7.2] - 2026-10-31
 
 ### Temps restants plus justes
