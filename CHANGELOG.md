@@ -2,6 +2,16 @@
 
 Les notes de chaque version publiée sur GitHub sont reprises de ce fichier.
 
+## [2.8.1] - 2026-11-02
+
+### « Nos souvenirs »
+- Photos RAW (NEF de Nikon, CR2, ARW, DNG, ORF, RW2, RAF…) : elles ont maintenant une vignette, tirée
+  de l'aperçu JPEG que l'appareil range dans le fichier (seul cet aperçu est lu). En grand, la
+  visionneuse montre cet aperçu, avec un lien pour ouvrir le fichier dans un logiciel photo. Pour
+  les photos déjà dans l'archive : relancer « Créer « Nos souvenirs » sur les disques ».
+- Après un classement (ou son annulation), la page est mise à jour aussitôt : elle connaît les
+  nouveaux emplacements des fichiers.
+
 ## [2.8.0] - 2026-11-02
 
 ### Déplacer un disque vers un autre

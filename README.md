@@ -138,7 +138,8 @@ disques »** (étape 7) la refait à la demande, par exemple après avoir branch
 
 ![« Nos souvenirs » : les papiers importants](docs/images/souvenirs-importants.png)
 
-Les petites images des photos (vignettes) sont fabriquées **pendant l'import**, avec les photos déjà
+Les photos RAW des appareils photo (NEF, CR2, DNG…) ont aussi leur vignette, tirée de l'aperçu
+JPEG rangé dans le fichier. Les petites images des photos (vignettes) sont fabriquées **pendant l'import**, avec les photos déjà
 lues : la page est prête dès la fin, sans heures de calcul en plus.
 
 ### Passer à un disque plus grand
