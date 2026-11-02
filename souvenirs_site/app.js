@@ -55,9 +55,15 @@ function when(f) {
   return (f.m ? MONTHS[f.m] + " " : "") + f.y;
 }
 function period(list) {
-  const ys = list.map((f) => f.y).filter(Boolean);
-  if (!ys.length) return "";
-  const a = Math.min(...ys), b = Math.max(...ys);
+  // Boucle et non Math.min(...ys) : avec des dizaines de milliers de photos, passer chaque année
+  // en argument dépasse la pile du navigateur (RangeError: Maximum call stack size exceeded).
+  let a = Infinity, b = -Infinity;
+  for (const f of list) {
+    if (!f.y) continue;
+    if (f.y < a) a = f.y;
+    if (f.y > b) b = f.y;
+  }
+  if (a === Infinity) return "";
   return a === b ? `en ${a}` : `de ${a} à ${b}`;
 }
 function groupBy(list, key) {

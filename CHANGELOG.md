@@ -2,6 +2,13 @@
 
 Les notes de chaque version publiée sur GitHub sont reprises de ce fichier.
 
+## [Non publié]
+
+### « Nos souvenirs » avec beaucoup de photos
+- La page restait bloquée sur « Chargement… » avec une très grande archive (des dizaines de milliers
+  de photos) : erreur « Maximum call stack size exceeded » dans le navigateur. Corrigé ; relancer
+  « Créer « Nos souvenirs » sur les disques » met la page à jour sur les disques.
+
 ## [2.7.3] - 2026-11-01
 
 ### Notifications plus claires
