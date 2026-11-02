@@ -21,8 +21,10 @@ from __future__ import annotations
 
 import datetime as dt
 import os
+import queue
 import re
 import struct
+import threading
 import zipfile
 from collections import Counter, defaultdict
 from dataclasses import dataclass
@@ -213,11 +215,24 @@ def _find_tiff(data: bytes, limit=64):
     return None
 
 
-def _jpeg_date(data: bytes):
+def _jpeg_date(data: bytes, more=None):
+    """Date EXIF d'un JPEG. more(n) : lit n octets de plus du fichier quand data ne suffit pas (sans
+    dépasser HEAD_MAX octets en tout, comme pour les autres formats)."""
     if data[:2] != b"\xff\xd8":
         return None
+    buf = [data]
+
+    def have(n):   # au moins n octets lus, si possible
+        while len(buf[0]) < n and more and len(buf[0]) < HEAD_MAX:
+            extra = more(min(max(n - len(buf[0]), JPEG_STEP), HEAD_MAX - len(buf[0])))
+            if not extra:
+                break
+            buf[0] += extra
+        return len(buf[0]) >= n
+
     i = 2
-    while i + 4 <= len(data):
+    while have(i + 4):
+        data = buf[0]
         if data[i] != 0xFF:
             return None
         marker = data[i + 1]
@@ -228,10 +243,13 @@ def _jpeg_date(data: bytes):
             i += 2
             continue
         seglen = struct.unpack(">H", data[i + 2:i + 4])[0]
-        if marker == 0xE1 and data[i + 4:i + 10] == b"Exif\0\0":
-            return _parse_tiff_date(data[i + 10:i + 2 + seglen])
         if marker == 0xDA:
             return None
+        if marker == 0xE1:
+            have(i + 2 + seglen)
+            data = buf[0]
+            if data[i + 4:i + 10] == b"Exif\0\0":
+                return _parse_tiff_date(data[i + 10:i + 2 + seglen])
         i += 2 + seglen
     return None
 
@@ -416,6 +434,33 @@ def _pdf_date(path, size):
     return None
 
 
+HEAD_MAX = 1 << 19      # début de fichier lu pour y chercher une date (photos, RAW, AVI)
+JPEG_STEP = 1 << 16     # un JPEG est lu par morceaux de 64 Ko : son bloc EXIF est presque toujours dedans
+# Formats dont la date se trouve dans les HEAD_MAX premiers octets (lus à l'import, déjà en mémoire)
+_OWN_READER = {"heic", "heif", "avif", "cr3", "mp4", "m4v", "mov", "qt", "3gp", "3g2", "raf"}
+
+
+def head_date_applies(name: str) -> bool:
+    """La date de ce fichier se lit-elle dans son début (head_date) ?"""
+    e = ext_of(name)
+    return e not in DOC_EXT and e not in _OWN_READER and category(name)[0] in ("photo", "video")
+
+
+def head_date(name: str, data: bytes):
+    """Date trouvée dans le début d'un fichier (au moins HEAD_MAX octets, ou tout le fichier) ; pour
+    les fichiers où head_date_applies. Même résultat que content_date, sans relire le fichier."""
+    try:
+        if ext_of(name) == "avi":
+            return _avi_date(data)
+        if data[:2] == b"\xff\xd8":
+            return _jpeg_date(data[:HEAD_MAX])
+        if data[:2] in (b"II", b"MM"):   # TIFF et la plupart des RAW (CR2, NEF, ARW, DNG, ORF, RW2…)
+            return _parse_tiff_date(data[:HEAD_MAX])
+    except (struct.error, ValueError, IndexError):
+        return None
+    return None
+
+
 def content_date(path: str, name: str):
     """Date inscrite dans le fichier lui-même, ou None. Ne lit que l'en-tête (rapide)."""
     e = ext_of(name)
@@ -444,13 +489,10 @@ def content_date(path: str, name: str):
                     f.seek(off)
                     return _jpeg_date(f.read(1 << 18))
                 return None
-            data = f.read(1 << 19)
-            if e == "avi":
-                return _avi_date(data)
-            if data[:2] == b"\xff\xd8":
-                return _jpeg_date(data)
-            if data[:2] in (b"II", b"MM"):   # TIFF et la plupart des RAW (CR2, NEF, ARW, DNG, ORF, RW2…)
-                return _parse_tiff_date(data)
+            data = f.read(JPEG_STEP)
+            if data[:2] == b"\xff\xd8" and e != "avi":
+                return _jpeg_date(data, f.read)
+            return head_date(name, data + f.read(HEAD_MAX - len(data)))
     except (OSError, struct.error, ValueError, IndexError):
         return None
     return None
@@ -583,6 +625,51 @@ def _target_dir(model, it: Item, parts, bundle_idx, label):
     return "/".join(["Documents", it.sub, str(date[0]) if date else UNKNOWN_DATE])
 
 
+READERS_PER_DISK = 4   # lectures en cours sur un même disque : il les enchaîne dans le meilleur ordre
+
+
+def read_dates(rows, roots: dict):
+    """(ligne, date lue dans le fichier) pour chaque ligne (path, volume), dans le désordre. Les disques
+    sont lus en même temps, chacun par READERS_PER_DISK fils qui avancent ensemble dans l'ordre du
+    catalogue (celui de l'écriture : à peu près celui des fichiers sur le disque)."""
+    by_disk = defaultdict(list)
+    for r in rows:
+        by_disk[r["volume"]].append(r)
+    out = queue.SimpleQueue()
+    stop = threading.Event()
+
+    def reader(root, it, lock):
+        try:
+            while not stop.is_set():
+                with lock:
+                    r = next(it, None)
+                if r is None:
+                    return
+                d = content_date(os.path.join(root, core.to_os(r["path"])), r["path"]) if root else None
+                out.put((r, d))
+        finally:
+            out.put(None)
+
+    threads = []
+    for vid, items in by_disk.items():
+        it, lock = iter(items), threading.Lock()
+        n = READERS_PER_DISK if roots.get(vid) else 1
+        threads += [threading.Thread(target=reader, args=(roots.get(vid), it, lock), daemon=True,
+                                     name="dates") for _ in range(n)]
+    for th in threads:
+        th.start()
+    running = len(threads)
+    try:
+        while running:
+            got = out.get()
+            if got is None:
+                running -= 1
+            else:
+                yield got
+    finally:
+        stop.set()
+
+
 def compute_plan(ar: core.Archive, model: str, roots: dict, progress=None) -> list[Item]:
     """Calcule le nouvel emplacement de chaque fichier de l'archive (sans rien déplacer)."""
     rows = ar.db.execute(
@@ -595,16 +682,17 @@ def compute_plan(ar: core.Archive, model: str, roots: dict, progress=None) -> li
     if progress:
         progress.total_files, progress.total_bytes = len(to_read), len(to_read)
     cache = {}
-    for r in to_read:
-        root = roots.get(r["volume"])
-        d = content_date(os.path.join(root, core.to_os(r["path"])), r["path"]) if root else None
-        cache[r["hash"]] = d
-        ar.db.execute("INSERT OR REPLACE INTO media_dates(hash,y,m,d,source,extracted_at) VALUES(?,?,?,?,?,?)",
-                      (r["hash"], *(d if d else (None, None, None)), "contenu" if d else "aucune", core.now_iso()))
-        if progress:
-            progress.file_done(1)
-        ar.maybe_commit()
-    ar.db.commit()
+    try:
+        for r, d in read_dates(to_read, roots):
+            cache[r["hash"]] = d
+            ar.db.execute("INSERT OR REPLACE INTO media_dates(hash,y,m,d,source,extracted_at) VALUES(?,?,?,?,?,?)",
+                          (r["hash"], *(d if d else (None, None, None)), "contenu" if d else "aucune",
+                           core.now_iso()))
+            if progress:
+                progress.file_done(1)
+            ar.maybe_commit()
+    finally:
+        ar.db.commit()
 
     # 2. Date et événement de chaque fichier
     items, parts_of, bundle_of = [], {}, {}

@@ -545,6 +545,30 @@ class ClassementTest(Base):
         self.assertEqual(classement.content_date(f, f), (2018, 6, 1))
         f = os.path.join(self.s, "Mes documents", "Impots", "declaration.xlsx")
         self.assertEqual(classement.content_date(f, f), (2012, 4, 10))
+        # Bloc EXIF après un gros bloc ICC (APP2 de 60 Ko) : lu en plusieurs morceaux, trouvé quand même
+        import struct
+        jp = make_jpeg("2011:02:03 10:00:00", b"z" * 300_000)
+        icc = b"\xff\xe2" + struct.pack(">H", 60_002) + b"i" * 60_000
+        jp = jp[:2] + icc + jp[2:]
+        f = os.path.join(self.tmp, "icc.jpg")
+        write(f, jp)
+        reads = []
+        real_open = open
+        from unittest import mock
+
+        def counting_open(*a, **k):
+            fh = real_open(*a, **k)
+            if "icc.jpg" in str(a[0]):
+                orig = fh.read
+                fh.read = lambda n=-1: reads.append(n) or orig(n)
+            return fh
+        with mock.patch("builtins.open", counting_open):
+            self.assertEqual(classement.content_date(f, f), (2011, 2, 3))
+        self.assertLess(sum(reads), 200_000)   # pas les 512 Ko d'avant
+        self.assertEqual(classement.head_date(f, jp), (2011, 2, 3))   # même date depuis la mémoire
+        # Les dates des photos sont déjà relevées pendant l'import (le classement ne les relit pas)
+        self.assertEqual(sorted((y or 0, s) for y, s in self.q("SELECT y, source FROM media_dates")),
+                         [(0, "aucune"), (2009, "contenu"), (2009, "contenu")])
         self.assertEqual(classement.date_from_name("WhatsApp Image 2015-03-02 at 10.jpg"), (2015, 3, 2))
         self.assertEqual(classement.date_from_name("DSC_2009.jpg"), None)   # compteur, pas une date
         self.assertEqual(classement.event_for(["S", "Users", "bob", "Pictures", "x.jpg"]), None)

@@ -11,10 +11,15 @@ Les notes de chaque version publiée sur GitHub sont reprises de ce fichier.
   Les autres disques ne changent pas, et l'ancien est libéré : il peut être formaté. Pause et reprise
   comme pour le regroupement.
 
-### Classement
+### Classement plus rapide
+- La lecture des dates (aperçu du classement) lit les disques de l'archive en même temps, avec
+  plusieurs lectures en cours par disque, et seulement 64 Ko par photo JPEG au lieu de 512 Ko.
+- Les dates des photos sont désormais relevées pendant l'import, dans les fichiers déjà lus : pour
+  tout ce qui est importé à partir de cette version, le classement, le bilan et « Nos souvenirs »
+  n'ont plus à relire les photos. (Pour ce qui est déjà dans l'archive, la lecture se fait une fois,
+  puis elle est gardée.)
 - L'analyse et le déplacement des fichiers affichaient des tailles et un débit sans signification
-  (« 0 o/s ») : ces étapes ne lisent presque rien. Elles affichent maintenant le nombre de fichiers et
-  le temps restant.
+  (« 0 o/s ») : ces étapes affichent maintenant le nombre de fichiers et le temps restant.
 
 ### Affichage
 - Sur un écran de taille courante (ou avec le détail ouvert), les tableaux étaient coupés sans pouvoir

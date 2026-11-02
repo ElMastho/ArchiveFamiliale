@@ -2204,8 +2204,27 @@ def _process_entry(ar: Archive, label: str, root: str, e: Entry, copy: bool,
     st.copied += 1
     st.copied_bytes += e.size
     st.per_volume[vid] += e.size
-    if thumbs and parts is not None:
-        thumbs.submit(h2, e.rel, parts)
+    if parts is not None:
+        _remember_date(ar, e.rel, h2, parts)
+        if thumbs:
+            thumbs.submit(h2, e.rel, parts)
+
+
+def _remember_date(ar: Archive, name: str, h: str, parts):
+    """Date de prise de vue d'une photo ou d'une vidéo déjà en mémoire : le classement, le bilan et
+    « Nos souvenirs » n'auront pas à relire le fichier pour la trouver."""
+    import classement   # ici : classement importe ce module
+    if not classement.head_date_applies(name):
+        return
+    head, n = [], 0
+    for p in parts:
+        head.append(p)
+        n += len(p)
+        if n >= classement.HEAD_MAX:
+            break
+    d = classement.head_date(name, b"".join(head))
+    ar.db.execute("INSERT OR IGNORE INTO media_dates(hash,y,m,d,source,extracted_at) VALUES(?,?,?,?,?,?)",
+                  (h, *(d or (None, None, None)), "contenu" if d else "aucune", now_iso()))
 
 
 def _set_backlog(ar: Archive, set_id: str):
