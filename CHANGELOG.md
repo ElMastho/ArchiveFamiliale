@@ -2,7 +2,7 @@
 
 Les notes de chaque version publiée sur GitHub sont reprises de ce fichier.
 
-## [Non publié]
+## [2.7.4] - 2026-11-02
 
 ### « Nos souvenirs » avec beaucoup de photos
 - La page restait bloquée sur « Chargement… » avec une très grande archive (des dizaines de milliers
