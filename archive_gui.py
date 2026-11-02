@@ -2668,14 +2668,21 @@ class App(tk.Tk):
                     "fichier par fichier, est enregistré dans _catalogue\\classement).\n\n"
                     "Appliquer ce classement maintenant ?\n(Il pourra être annulé.)"):
                 self.run_jobs([(f"Classement (modèle {model})", ["classer", *self._m(), "--modele", model,
-                                                                  "--appliquer"])],
+                                                                  "--appliquer"]),
+                               self._souvenirs_job()],
                               lambda _: messagebox.showinfo(
                                   APP_TITLE, "Classement terminé ✔\n\nOuvrez le dossier de l'archive pour voir le "
                                   "résultat. Les sauvegardes branchées ont été mises à jour ; les autres le seront à "
-                                  "leur prochaine mise à jour (sans recopie)."))
+                                  "leur prochaine mise à jour (sans recopie). « Nos souvenirs » suit les nouveaux "
+                                  "emplacements."))
 
         self.run_jobs([(f"Aperçu du classement (modèle {model})", ["classer", *self._m(), "--modele", model])],
                       after_preview)
+
+    def _souvenirs_job(self):
+        """Mise à jour de « Nos souvenirs » après un classement : la page retrouve chaque fichier par son
+        emplacement. Rapide : les vignettes, rangées par empreinte, ne sont pas refaites."""
+        return ("Mise à jour de « Nos souvenirs »", ["souvenirs", *self._m()])
 
     def undo_classify(self):
         if not self.st.get("can_undo"):
@@ -2684,7 +2691,7 @@ class App(tk.Tk):
         if not messagebox.askyesno(APP_TITLE, "Remettre tous les fichiers là où ils étaient avant le dernier "
                                    "classement ?"):
             return
-        self.run_jobs([("Annulation du classement", ["annuler-classement", *self._m()])],
+        self.run_jobs([("Annulation du classement", ["annuler-classement", *self._m()]), self._souvenirs_job()],
                       lambda _: messagebox.showinfo(APP_TITLE, "Classement annulé : les fichiers sont revenus à leur "
                                                     "emplacement précédent."))
 

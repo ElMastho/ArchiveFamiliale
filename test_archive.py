@@ -49,6 +49,25 @@ def jpeg(w, h, color=(200, 120, 40), preview=None, orientation=1):
     return data[:2] + b"\xff\xe1" + struct.pack(">H", len(app1) + 2) + app1 + data[2:]
 
 
+def nef(orientation=6, raw_bytes=3_000_000):
+    """Fichier construit comme un NEF Nikon : IFD0 (orientation, petite vignette 160x120 non
+    compressée), un sous-IFD avec l'aperçu JPEG (JpgFromRaw), puis les données brutes."""
+    import struct
+    from PIL import Image
+    pb = io.BytesIO()
+    Image.new("RGB", (1200, 800), (10, 200, 10)).save(pb, "JPEG")
+    preview = pb.getvalue()
+    sub_off = 8 + 2 + 3 * 12 + 4
+    sub = struct.pack("<H", 2)
+    prev_off = sub_off + 2 + 2 * 12 + 4
+    sub += struct.pack("<HHII", 0x0201, 4, 1, prev_off) + struct.pack("<HHII", 0x0202, 4, 1, len(preview))
+    sub += struct.pack("<I", 0)
+    ifd0 = struct.pack("<H", 3) + struct.pack("<HHIHH", 0x0112, 3, 1, orientation, 0)
+    ifd0 += struct.pack("<HHII", 0x0103, 3, 1, 1) + struct.pack("<HHII", 0x014A, 4, 1, sub_off)
+    ifd0 += struct.pack("<I", 0)
+    return b"II*\0" + struct.pack("<I", 8) + ifd0 + sub + preview + os.urandom(raw_bytes)
+
+
 def run(*argv):
     out = io.StringIO()
     with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
@@ -337,6 +356,38 @@ class SingleDiskTest(Base):
         with open(os.path.join(self.master, "_catalogue", "souvenirs", "donnees.js"), encoding="utf-8") as f:
             files = json.loads(f.read()[len("window.SOUVENIRS = "):].rstrip().rstrip(";"))["files"]
         self.assertEqual(sum(1 for f in files if f[6]), 2)
+
+    def test_raw_photo_thumbnails(self):
+        """Photos RAW (NEF…) : la vignette vient de l'aperçu JPEG rangé dans le fichier, tourné selon
+        l'orientation ; seul cet aperçu est lu. Pendant l'import comme après."""
+        import vignettes
+        if not vignettes.available():
+            self.skipTest("Pillow absent")
+        from PIL import Image
+        data = nef()
+        with open(os.path.join(self.tmp, "x.nef"), "wb") as f:
+            f.write(data)
+        dst = os.path.join(self.tmp, "v.jpg")
+        ok, read = vignettes.make_from_file_counted(os.path.join(self.tmp, "x.nef"), dst)
+        self.assertTrue(ok)
+        self.assertLess(read, 200_000)   # l'aperçu, pas les 3 Mo de données brutes
+        with Image.open(dst) as im:
+            self.assertEqual(im.size, (240, 360))            # 1200x800 tourné d'un quart de tour
+            self.assertGreater(im.getpixel((100, 100))[1], 150)
+        with open(os.path.join(self.tmp, "bad.nef"), "wb") as f:
+            f.write(b"II*\0" + os.urandom(5000))
+        self.assertFalse(vignettes.make_from_file(os.path.join(self.tmp, "bad.nef"), dst + "3"))
+        # Pendant l'import (fichier en mémoire), puis visible dans « Nos souvenirs »
+        src = os.path.join(self.tmp, "reflex")
+        write(os.path.join(src, "Maurice originaux NEF", "ASC_0916.NEF"), nef())
+        rc, out = run("importer", src, "-m", self.master, "-l", "Reflex")
+        self.assertEqual(rc, 0, out)
+        h = self.q("SELECT hash FROM stored")[0][0]
+        self.assertTrue(os.path.exists(os.path.join(self.master, "_catalogue", "souvenirs", "v", h[:2], h + ".jpg")))
+        self.assertEqual(run("souvenirs", "-m", self.master)[0], 0)
+        with open(os.path.join(self.master, "_catalogue", "souvenirs", "donnees.js"), encoding="utf-8") as f:
+            files = json.loads(f.read()[len("window.SOUVENIRS = "):].rstrip().rstrip(";"))["files"]
+        self.assertEqual([f[6] for f in files], [h])
 
     def test_important_documents(self):
         import bilan
@@ -977,6 +1028,28 @@ class GuiTest(Base):
         self.assertIn("Regroupement terminé", mb.showinfo.call_args[0][1])
         with open(os.path.join(self.tmp, "appdata", "ArchiveFamiliale", "config.json"), encoding="utf-8") as f:
             self.assertTrue(archive.same_path(json.load(f)["master"], big))
+
+    def test_classify_from_gui_updates_souvenirs(self):
+        """Après un classement lancé depuis l'interface, « Nos souvenirs » connaît les nouveaux emplacements."""
+        run("importer", self.src1, "-m", self.master, "-l", "Disque1")
+        self.assertEqual(run("souvenirs", "-m", self.master)[0], 0)
+        before = {p for (p,) in self.q("SELECT path FROM stored")}
+        app = self.open_app()
+        done = []
+        app.run_jobs([("Classement", ["classer", *app._m(), "--modele", "A", "--appliquer"]),
+                      app._souvenirs_job()], lambda results: done.append(results))
+        end = time.monotonic() + 30
+        while not done:
+            self.assertLess(time.monotonic(), end, "le classement ne se termine pas")
+            app.update()
+            time.sleep(0.02)
+        self.assertEqual([rc for _, rc, _ in done[0]], [0, 0], done[0])
+        with open(os.path.join(self.master, "_catalogue", "souvenirs", "donnees.js"), encoding="utf-8") as f:
+            page = f.read()
+        paths = [p for (p,) in self.q("SELECT path FROM stored")]
+        self.assertTrue(set(paths) - before)   # le classement a bien déplacé des fichiers
+        for p in paths:
+            self.assertIn(json.dumps(p, ensure_ascii=False), page)
 
     def test_move_disk_from_gui(self):
         """Déplacement d'un disque depuis l'interface : en pause, la carte propose de le reprendre ; à la fin,

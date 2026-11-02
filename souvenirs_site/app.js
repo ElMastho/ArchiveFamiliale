@@ -249,6 +249,11 @@ function showCurrent() {
     const v = stage.querySelector("video");
     v.addEventListener("ended", () => { if (V.timer) step(1); });
     v.addEventListener("error", () => cantShow(f));
+  } else if (f.fam === "photo" && thumbUrl(f)) {
+    // RAW (NEF, CR2…) : le navigateur ne sait pas l'afficher ; on montre l'aperçu rangé dans le fichier
+    stage.innerHTML = `<div class="raw"><img src="${thumbUrl(f)}" alt="${esc(f.name)}">
+      <p>Aperçu réduit. Ce fichier (${esc(f.ext.toUpperCase())}) s'ouvre en grand avec un logiciel photo :
+      <a href="${src}" target="_blank" rel="noopener">ouvrir le fichier</a>.</p></div>`;
   } else {
     cantShow(f);
   }
