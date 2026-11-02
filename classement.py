@@ -880,7 +880,7 @@ def cmd_classify(args) -> int:
             print(f"Classement de l'archive — modèle {model} : {MODELS[model]}"
                   + ("" if args.appliquer else "  (SIMULATION : rien n'est déplacé)"))
             print("Lecture des dates dans les fichiers (les fichiers déjà lus sont sautés)…")
-            progress = core.Progress(0, 0)
+            progress = core.Progress(0, 0, sizes=False)
             try:
                 items = compute_plan(ar, model, roots, progress)
             except KeyboardInterrupt:
@@ -911,7 +911,8 @@ def cmd_classify(args) -> int:
                 return 0
             print(f"\nDéplacement de {core.fmt_int(len(moves))} fichiers…")
             batch, moved, errors, interrupted = apply_moves(ar, moves, roots, model, "classement",
-                                                            progress=core.Progress(len(moves), len(moves)))
+                                                            progress=core.Progress(len(moves), len(moves),
+                                                                                   sizes=False))
             if moved:
                 ar.set_meta("classification_model", model)
                 ar.set_meta("classification_at", core.now_iso())
@@ -956,7 +957,8 @@ def cmd_undo(args) -> int:
                   f"{core.fmt_int(len(moves))} fichiers remis à leur place.")
             batch, moved, errors, interrupted = apply_moves(ar, moves, roots, last["model"], "annulation",
                                                             undo_of=last["id"],
-                                                            progress=core.Progress(len(moves), len(moves)))
+                                                            progress=core.Progress(len(moves), len(moves),
+                                                                                   sizes=False))
             if interrupted:
                 print("Interrompu : relancez la même commande pour terminer l'annulation.")
                 return 130

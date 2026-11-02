@@ -743,6 +743,58 @@ class MultiDiskTest(Base):
         self.assertEqual(run("importer", self.srcs[2], "-m", big, "-l", "S2")[0], 0)
         self.assertEqual(self.per_volume(), {"ARCHIVE-1": 12})
 
+    def test_move_one_disk(self):
+        """ARCHIVE-2 déplacé seul sur un autre disque : copie, relecture, puis le nouveau disque prend sa
+        place sous le même nom ; ARCHIVE-1 et le catalogue ne bougent pas. Puis ARCHIVE-1 déplacé seul."""
+        self.cap(self.master, 45 * KB)
+        v2 = self.add_disk("vol2", 100 * KB)
+        for i, s in enumerate(self.srcs[:2]):
+            self.assertEqual(run("importer", s, "-m", self.master, "-l", f"S{i}")[0], 0)
+        before = self.per_volume()
+        new2 = os.path.join(self.tmp, "petit")
+        self.cap(new2, 20 * KB)
+        rc, out = run("deplacer-disque", "ARCHIVE-2", new2, "-m", self.master, "--meme-disque")
+        self.assertEqual(rc, 2, out)
+        self.assertIn("Pas assez de place", out)
+        rc, out = run("deplacer-disque", "ARCHIVE-9", new2, "-m", self.master, "--meme-disque")
+        self.assertEqual(rc, 2, out)
+        self.assertIn("n'est pas un disque de l'archive", out)
+        self.cap(new2, 60 * KB)   # plus petit que l'ancien (100 Ko), mais assez pour son contenu
+        rc, out = run("deplacer-disque", "archive-2", new2, "-m", self.master, "--meme-disque")
+        self.assertEqual(rc, 0, out)
+        self.assertIn("Déplacement terminé", out)
+        self.assertIn(f"Copiés cette fois : {before['ARCHIVE-2']}", out)
+        self.assertEqual(archive.LAST_REGROUP["master"], self.master)
+        self.assertEqual(archive.LAST_REGROUP["moved"], "ARCHIVE-2")
+        # Même nom, même disque pour le catalogue ; l'ancien est libéré, ARCHIVE-1 n'a pas bougé
+        self.assertEqual(self.per_volume(), before)
+        self.assertEqual(archive.read_marker(new2)["name"], "ARCHIVE-2")
+        self.assertTrue(os.path.exists(os.path.join(new2, "_catalogue", archive.CATALOG_COPY_NAME)))
+        self.assertFalse(os.path.exists(os.path.join(new2, "_catalogue", archive.REGROUP_MARKER)))
+        self.assertFalse(os.path.exists(os.path.join(v2, "_catalogue", "volume.json")))
+        self.assertTrue(os.path.exists(os.path.join(v2, archive.RETIRED_NOTE)))
+        self.assertTrue(os.path.exists(os.path.join(self.master, "_catalogue", "catalogue.sqlite")))
+        self.assertEqual(self.q("SELECT root FROM volumes WHERE name='ARCHIVE-2'")[0][0], os.path.normpath(new2))
+        shutil.rmtree(v2)   # formaté : l'archive n'en a plus besoin
+        rc, out = run("verifier", "-m", self.master)
+        self.assertEqual(rc, 0, out)
+        self.assertNotIn("NON VÉRIFIÉ", out)
+        # ARCHIVE-1 seul : le catalogue part avec lui, ARCHIVE-2 reste où il est
+        new1 = os.path.join(self.tmp, "nouveau1")
+        self.cap(new1, 100 * KB)
+        rc, out = run("deplacer-disque", "ARCHIVE-1", new1, "-m", self.master, "--meme-disque")
+        self.assertEqual(rc, 0, out)
+        self.assertIn("« ARCHIVE-1 » (avec le catalogue) est maintenant sur", out)
+        self.assertEqual(archive.LAST_REGROUP["master"], os.path.normpath(new1))
+        self.assertFalse(os.path.exists(os.path.join(self.master, "_catalogue", "catalogue.sqlite")))
+        self.master = new1
+        self.assertEqual(self.per_volume(), before)
+        self.assertEqual(self.q("SELECT COUNT(*) FROM meta WHERE key IN ('regroup_target', 'regroup_volume')")
+                         [0][0], 0)
+        rc, out = run("verifier", "-m", new1)
+        self.assertEqual(rc, 0, out)
+        self.assertNotIn("NON VÉRIFIÉ", out)
+
     def test_unplugged_disk(self):
         self.cap(self.master, 45 * KB)
         v2 = self.add_disk("vol2", 100 * KB)
@@ -901,6 +953,34 @@ class GuiTest(Base):
         self.assertIn("Regroupement terminé", mb.showinfo.call_args[0][1])
         with open(os.path.join(self.tmp, "appdata", "ArchiveFamiliale", "config.json"), encoding="utf-8") as f:
             self.assertTrue(archive.same_path(json.load(f)["master"], big))
+
+    def test_move_disk_from_gui(self):
+        """Déplacement d'un disque depuis l'interface : en pause, la carte propose de le reprendre ; à la fin,
+        le message parle du disque déplacé (et pas d'un regroupement)."""
+        from unittest import mock
+        import archive_gui
+        run("importer", self.src1, "-m", self.master, "-l", "Disque1")
+        dst = os.path.join(self.tmp, "autre", "ArchiveFamiliale")
+        app = self.open_app()
+        vid = self.q("SELECT id FROM volumes WHERE name='ARCHIVE-1'")[0][0]
+        with contextlib.closing(self.db()) as con:   # déplacement en pause
+            con.execute("INSERT INTO meta(key,value) VALUES('regroup_target', ?), ('regroup_volume', ?)", (dst, vid))
+            con.commit()
+        app.refresh()
+        self.assertEqual(app.hero_title.cget("text"), "Déplacement de « ARCHIVE-1 » à reprendre")
+        with contextlib.closing(self.db()) as con:
+            con.execute("DELETE FROM meta WHERE key LIKE 'regroup_%'")
+            con.commit()
+        with mock.patch.object(archive_gui, "messagebox") as mb, \
+                mock.patch.object(archive, "_check_new_volume_location"):   # même disque physique, ici
+            app._run_regroup(dst, "ARCHIVE-1")
+            end = time.monotonic() + 30
+            while app.busy or not mb.showinfo.called:
+                self.assertLess(time.monotonic(), end, "le déplacement ne se termine pas")
+                app.update()
+                time.sleep(0.02)
+        self.assertTrue(archive.same_path(app.master_path, dst))
+        self.assertIn("Déplacement terminé : « ARCHIVE-1 »", mb.showinfo.call_args[0][1])
 
     def run_queue(self, app, items, until):
         """Lance une file d'import et fait tourner l'interface jusqu'à until(app) (30 s maximum)."""

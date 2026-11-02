@@ -2,6 +2,20 @@
 
 Les notes de chaque version publiée sur GitHub sont reprises de ce fichier.
 
+## [2.8.0] - 2026-11-02
+
+### Déplacer un disque vers un autre
+- Étape 1, « Déplacer un disque vers un autre… » : un seul disque de l'archive (par exemple ARCHIVE-2)
+  est copié sur un autre disque, plus petit ou plus grand, du moment que son contenu y tient. Chaque
+  copie est relue ; seulement ensuite le nouveau disque prend la place de l'ancien, sous le même nom.
+  Les autres disques ne changent pas, et l'ancien est libéré : il peut être formaté. Pause et reprise
+  comme pour le regroupement.
+
+### Classement
+- L'analyse et le déplacement des fichiers affichaient des tailles et un débit sans signification
+  (« 0 o/s ») : ces étapes ne lisent presque rien. Elles affichent maintenant le nombre de fichiers et
+  le temps restant.
+
 ## [2.7.4] - 2026-11-02
 
 ### « Nos souvenirs » avec beaucoup de photos
