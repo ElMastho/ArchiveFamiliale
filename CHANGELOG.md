@@ -16,6 +16,12 @@ Les notes de chaque version publiée sur GitHub sont reprises de ce fichier.
   (« 0 o/s ») : ces étapes ne lisent presque rien. Elles affichent maintenant le nombre de fichiers et
   le temps restant.
 
+### Affichage
+- Sur un écran de taille courante (ou avec le détail ouvert), les tableaux étaient coupés sans pouvoir
+  défiler et le graphique du bilan était tronqué. Les tableaux prennent maintenant la place disponible,
+  avec une barre de défilement si besoin (la molette marche), et le graphique se redessine à la taille
+  disponible.
+
 ## [2.7.4] - 2026-11-02
 
 ### « Nos souvenirs » avec beaucoup de photos

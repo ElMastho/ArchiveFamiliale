@@ -1057,13 +1057,26 @@ class App(tk.Tk):
     STEP_ICONS = {1: "drive", 2: "import", 3: "verify", 4: "backup", 5: "check", 6: "sort", 7: "chart"}
 
     def _tree(self, parent, cols, height):
-        t = ttk.Treeview(parent, columns=[c for c, _, _ in cols], show="headings", height=height,
+        """Tableau qui prend la place disponible : sur un petit écran (ou détail ouvert), il rétrécit
+        et une barre de défilement apparaît (la molette fait défiler)."""
+        box = ttk.Frame(parent, style="CardFlat.TFrame", padding=0)
+        box.pack(fill="both", expand=True, pady=(theme.px(12), 0))
+        t = ttk.Treeview(box, columns=[c for c, _, _ in cols], show="headings", height=height,
                          style="Data.Treeview", selectmode="none")
+        sb = ttk.Scrollbar(box, orient="vertical", command=t.yview)
+
+        def on_scroll(first, last):
+            if float(first) <= 0 and float(last) >= 1:
+                sb.pack_forget()
+            elif not sb.winfo_ismapped():
+                sb.pack(side="right", fill="y", before=t)
+            sb.set(first, last)
+        t.configure(yscrollcommand=on_scroll)
         for c, label, w in cols:
             t.heading(c, text=label, anchor="w")
             t.column(c, width=theme.px(w * 0.6), minwidth=theme.px(40), anchor="w", stretch=True)
         t.tag_configure("odd", background=theme.STRIPE)
-        t.pack(fill="x", pady=(theme.px(12), 0))
+        t.pack(side="left", fill="both", expand=True)
         return t
 
     def _icon_label(self, parent, name, style, fallback=""):
@@ -1208,6 +1221,7 @@ class App(tk.Tk):
         both.pack(fill="both", expand=True)
         both.columnconfigure(0, weight=5, uniform="bilan")
         both.columnconfigure(1, weight=4, uniform="bilan")
+        both.rowconfigure(0, weight=1)
         left = ttk.Frame(both, style="CardFlat.TFrame")
         left.grid(row=0, column=0, sticky="nsew", padx=(0, P(16)))
         self.tree_kind = self._tree(left, [("type", "Type", 230), ("nombre", "Nombre", 100),
@@ -1215,8 +1229,9 @@ class App(tk.Tk):
         right = ttk.Frame(both, style="CardFlat.TFrame")
         right.grid(row=0, column=1, sticky="nsew")
         ttk.Label(right, text="PHOTOS ET VIDÉOS PAR ANNÉE", style="CardKicker.TLabel").pack(anchor="w", pady=(P(12), 0))
+        # Hauteur souhaitée 170 ; moins si la place manque (le graphique est redessiné à la taille)
         self.chart = tk.Canvas(right, height=P(170), background=theme.CARD, highlightthickness=0)
-        self.chart.pack(fill="x", pady=(P(4), 0))
+        self.chart.pack(fill="both", expand=True, pady=(P(4), 0))
         self.chart.bind("<Configure>", lambda e: self._draw_chart())
         self.summary = None        # dernier bilan calculé
         self.summary_key = None    # état de l'archive au moment du calcul
@@ -1372,7 +1387,7 @@ class App(tk.Tk):
                              core.fmt_size(sum(r[3] for r in imp)), when))
             for _, label, n, b in imp:
                 self._insert(t, (f"      {label}", core.fmt_int(n), core.fmt_size(b), ""))
-        t.configure(height=max(9, min(len(t.get_children()), 16)))   # au-delà : la molette fait défiler
+        t.configure(height=max(9, min(len(t.get_children()), 16)))   # moins si la place manque : il défile
         self._draw_chart()
         self._update_steps()
 
