@@ -74,6 +74,8 @@ voir son détail et ses boutons.
    l'archive (ARCHIVE-1, ARCHIVE-2…) sur ce disque, relit chaque copie, puis en fait le nouvel
    ARCHIVE-1. Les anciens disques sont alors libérés : vous pouvez les formater. Le regroupement
    peut être mis en pause et repris ; les anciens disques ne sont jamais modifiés pendant la copie.
+   Pour changer UN seul disque (par exemple ARCHIVE-2 vers un disque plus petit) : « Déplacer un
+   disque vers un autre… ». Même vérification ; le nouveau disque garde le nom de l'ancien.
 
 2. Importer les anciens disques — un ou plusieurs à la fois
    • Branchez un ou plusieurs anciens disques (un hub USB alimenté aide beaucoup).
@@ -1055,13 +1057,26 @@ class App(tk.Tk):
     STEP_ICONS = {1: "drive", 2: "import", 3: "verify", 4: "backup", 5: "check", 6: "sort", 7: "chart"}
 
     def _tree(self, parent, cols, height):
-        t = ttk.Treeview(parent, columns=[c for c, _, _ in cols], show="headings", height=height,
+        """Tableau qui prend la place disponible : sur un petit écran (ou détail ouvert), il rétrécit
+        et une barre de défilement apparaît (la molette fait défiler)."""
+        box = ttk.Frame(parent, style="CardFlat.TFrame", padding=0)
+        box.pack(fill="both", expand=True, pady=(theme.px(12), 0))
+        t = ttk.Treeview(box, columns=[c for c, _, _ in cols], show="headings", height=height,
                          style="Data.Treeview", selectmode="none")
+        sb = ttk.Scrollbar(box, orient="vertical", command=t.yview)
+
+        def on_scroll(first, last):
+            if float(first) <= 0 and float(last) >= 1:
+                sb.pack_forget()
+            elif not sb.winfo_ismapped():
+                sb.pack(side="right", fill="y", before=t)
+            sb.set(first, last)
+        t.configure(yscrollcommand=on_scroll)
         for c, label, w in cols:
             t.heading(c, text=label, anchor="w")
             t.column(c, width=theme.px(w * 0.6), minwidth=theme.px(40), anchor="w", stretch=True)
         t.tag_configure("odd", background=theme.STRIPE)
-        t.pack(fill="x", pady=(theme.px(12), 0))
+        t.pack(side="left", fill="both", expand=True)
         return t
 
     def _icon_label(self, parent, name, style, fallback=""):
@@ -1148,7 +1163,8 @@ class App(tk.Tk):
                         [("Créer l'archive…", self.create_archive, True, True),
                          ("Ajouter un disque à l'archive…", self.add_main_disk, True, False),
                          ("Ouvrir une archive existante…", self.open_archive, False, True),
-                         ("Regrouper sur un plus grand disque…", self.regroup, False, False)])
+                         ("Regrouper sur un plus grand disque…", self.regroup, False, False),
+                         ("Déplacer un disque vers un autre…", self.move_disk, False, False)])
         self.tree_vol = self._tree(s1, [("disque", "Disque", 130), ("branche", "Branché ?", 170),
                                         ("fichiers", "Fichiers", 90), ("donnees", "Données", 100),
                                         ("libre", "Libre", 100), ("verif", "Vérification", 200)], 3)
@@ -1205,6 +1221,7 @@ class App(tk.Tk):
         both.pack(fill="both", expand=True)
         both.columnconfigure(0, weight=5, uniform="bilan")
         both.columnconfigure(1, weight=4, uniform="bilan")
+        both.rowconfigure(0, weight=1)
         left = ttk.Frame(both, style="CardFlat.TFrame")
         left.grid(row=0, column=0, sticky="nsew", padx=(0, P(16)))
         self.tree_kind = self._tree(left, [("type", "Type", 230), ("nombre", "Nombre", 100),
@@ -1212,8 +1229,9 @@ class App(tk.Tk):
         right = ttk.Frame(both, style="CardFlat.TFrame")
         right.grid(row=0, column=1, sticky="nsew")
         ttk.Label(right, text="PHOTOS ET VIDÉOS PAR ANNÉE", style="CardKicker.TLabel").pack(anchor="w", pady=(P(12), 0))
+        # Hauteur souhaitée 170 ; moins si la place manque (le graphique est redessiné à la taille)
         self.chart = tk.Canvas(right, height=P(170), background=theme.CARD, highlightthickness=0)
-        self.chart.pack(fill="x", pady=(P(4), 0))
+        self.chart.pack(fill="both", expand=True, pady=(P(4), 0))
         self.chart.bind("<Configure>", lambda e: self._draw_chart())
         self.summary = None        # dernier bilan calculé
         self.summary_key = None    # état de l'archive au moment du calcul
@@ -1369,7 +1387,7 @@ class App(tk.Tk):
                              core.fmt_size(sum(r[3] for r in imp)), when))
             for _, label, n, b in imp:
                 self._insert(t, (f"      {label}", core.fmt_int(n), core.fmt_size(b), ""))
-        t.configure(height=max(9, min(len(t.get_children()), 16)))   # au-delà : la molette fait défiler
+        t.configure(height=max(9, min(len(t.get_children()), 16)))   # moins si la place manque : il défile
         self._draw_chart()
         self._update_steps()
 
@@ -1729,6 +1747,13 @@ class App(tk.Tk):
                            "Vous pouvez laisser l'ordinateur travailler seul"
                            + (f" : encore {left} disque(s) après celui-ci." if left > 0 else ".")
                            + " Pour l'interrompre sans rien perdre : « Mettre en pause », en bas.")
+        elif st["meta"].get("regroup_target") and self._moving_name():
+            n = 1
+            name = self._moving_name()
+            self._set_hero("warn", "DÉPLACEMENT EN PAUSE", f"Déplacement de « {name} » à reprendre",
+                           f"La copie de « {name} » sur le nouveau disque n'est pas finie. Branchez les deux "
+                           "disques (et ARCHIVE-1), puis reprenez : rien n'est refait.",
+                           self.regroup, "Reprendre le déplacement")
         elif st["meta"].get("regroup_target"):
             n = 1
             self._set_hero("warn", "REGROUPEMENT EN PAUSE", "Regroupement de l'archive à reprendre",
@@ -2060,14 +2085,16 @@ class App(tk.Tk):
             return
         if st["meta"].get("regroup_target"):
             target = core.find_regroup_target(st["meta"]["regroup_target"], st["meta"].get("archive_id"))
+            name = self._moving_name()
+            what = f"le déplacement de « {name} »" if name else "le regroupement"
             if not target:
-                messagebox.showinfo(APP_TITLE, "Un regroupement est en cours, mais son nouveau disque n'est pas "
-                                    f"branché (il était en {st['meta']['regroup_target']}).\n\nBranchez-le, puis "
-                                    "cliquez à nouveau sur « Reprendre le regroupement ».")
+                messagebox.showinfo(APP_TITLE, f"{what[0].upper() + what[1:]} est en cours, mais le nouveau disque "
+                                    f"n'est pas branché (il était en {st['meta']['regroup_target']}).\n\n"
+                                    "Branchez-le, puis cliquez à nouveau sur « Reprendre ».")
                 return
-            if messagebox.askyesno(APP_TITLE, f"Reprendre le regroupement de l'archive sur {target} ?\n\n"
+            if messagebox.askyesno(APP_TITLE, f"Reprendre {what} sur {target} ?\n\n"
                                    "Ce qui est déjà copié et vérifié n'est pas refait."):
-                self._run_regroup(target)
+                self._run_regroup(target, name)
             return
         vols = st["main_vols"]
         need = st["stored_b"]
@@ -2100,12 +2127,74 @@ class App(tk.Tk):
             return
         self._run_regroup(path)
 
-    def _run_regroup(self, path):
+    def _moving_name(self):
+        """Nom du disque en cours de déplacement (déplacement d'un seul disque en pause), sinon None."""
+        vid = (self.st or {}).get("meta", {}).get("regroup_volume")
+        return next((v["name"] for v in self.st["main_vols"] if v["id"] == vid), None) if vid else None
+
+    def move_disk(self):
+        """Déplacer UN disque de l'archive sur un autre (plus petit ou plus grand) : même vérification
+        que le regroupement ; le nouveau disque garde le nom de l'ancien."""
+        st = self.st
+        if not st:
+            return
+        if st["meta"].get("regroup_target"):
+            self.regroup()   # un regroupement ou un déplacement est déjà en cours : on le reprend
+            return
+        vols = st["main_vols"]
+        labels = [f"{v['name']}  —  {core.fmt_size(v['bytes'])}, "
+                  + (f"branché ({v['path']})" if v["path"] else "non branché") for v in vols]
+        if len(vols) > 1:
+            dlg = ChoiceDialog(self, "Déplacer un disque", "Quel disque de l'archive voulez-vous déplacer vers un "
+                               "autre disque ?", labels)
+            self.wait_window(dlg)
+            if not dlg.result:
+                return
+            v = vols[labels.index(dlg.result)]
+        else:
+            v = vols[0]
+        name, need = v["name"], v["bytes"]
+        margin = core.FREE_SPACE_MARGIN + (core.PRIMARY_EXTRA_MARGIN if v["number"] == 1 else 0)
+        dlg = DriveDialog(self, "regroup", f"Déplacer « {name} » vers un autre disque",
+                          f"Tout le contenu de « {name} » ({core.fmt_size(need)}) va être copié sur un autre disque, "
+                          "qui peut être plus petit ou plus grand. Branchez ce disque neuf (ou vide) et "
+                          f"sélectionnez-le. Il faut au moins {core.fmt_size(need + margin)} libres.")
+        self.wait_window(dlg)
+        if not dlg.result:
+            return
+        path = dlg.result["path"]
+        d = dlg.result.get("drive")
+        if d and d.free < need + margin:
+            messagebox.showerror(APP_TITLE, f"Ce disque est trop petit : {core.fmt_size(d.free)} libres, il faut "
+                                 f"au moins {core.fmt_size(need + margin)}.")
+            return
+        hours = max(1, round(2 * need / (120 * 1024 ** 2) / 3600))   # copie puis relecture, ~120 Mo/s
+        if not messagebox.askyesno(
+                APP_TITLE, f"Déplacer « {name} » sur {path} ?\n\n"
+                "1. Chaque fichier est copié sur le nouveau disque,\n"
+                "2. puis relu et comparé à son empreinte,\n"
+                f"3. et seulement quand TOUT est vérifié, le nouveau disque devient « {name} ».\n\n"
+                f"Comptez environ {hours} heure(s). Vous pouvez mettre en pause et reprendre plus tard. L'ancien "
+                "disque n'est jamais modifié pendant la copie ; à la fin, il est simplement « libéré » : vous "
+                "pourrez le formater. Les autres disques ne changent pas."
+                + ("" if v["path"] else f"\n\n« {name} » n'est pas branché : branchez-le avant de lancer.")):
+            return
+        self._run_regroup(path, name)
+
+    def _run_regroup(self, path, name=None):
         def done(_):
             r = dict(core.LAST_REGROUP)
             if not r:
                 return
             self.set_master(r["master"])
+            if r.get("moved"):
+                freed = "".join(f"\n\nL'ancien disque ({where}) ne fait plus partie de l'archive : vous pouvez le "
+                                "formater pour vous en resservir (dans l'Explorateur, clic droit sur le disque → "
+                                "« Formater… »)." for _, where in r["freed"])
+                messagebox.showinfo(APP_TITLE, f"Déplacement terminé : « {r['moved']} » est maintenant sur le nouveau "
+                                    f"disque. Collez-lui l'étiquette « {r['moved']} ».{freed}")
+                self.run_jobs([("Mise à jour de « Nos souvenirs »", ["souvenirs", *self._m()])])
+                return
             freed = "\n".join(f"  • {name}  ({where})" for name, where in r["freed"])
             messagebox.showinfo(APP_TITLE, f"Regroupement terminé : toute l'archive est maintenant sur {r['master']}, "
                                 "qui devient « ARCHIVE-1 ». Collez-lui cette étiquette.\n\n"
@@ -2113,7 +2202,10 @@ class App(tk.Tk):
                                 "Vous pouvez les formater pour vous en resservir : dans l'Explorateur, clic droit "
                                 "sur le disque → « Formater… ». Les sauvegardes, elles, ne changent pas.")
             self.run_jobs([("Mise à jour de « Nos souvenirs »", ["souvenirs", *self._m()])])
-        self.run_jobs([("Regroupement de l'archive", ["regrouper", path, *self._m()])], done)
+        if name:
+            self.run_jobs([(f"Déplacement de « {name} »", ["deplacer-disque", name, path, *self._m()])], done)
+        else:
+            self.run_jobs([("Regroupement de l'archive", ["regrouper", path, *self._m()])], done)
 
     def add_source(self, copy: bool):
         intro = ("Branchez les anciens disques (autant que vous voulez), cochez-les, puis lancez : ils seront "

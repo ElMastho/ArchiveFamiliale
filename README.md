@@ -150,6 +150,18 @@ jamais modifiés pendant la copie ; une fois tout vérifié, ils sont « libér�
 formater (dans l'Explorateur, clic droit sur le disque → « Formater… ») pour vous en resservir.
 Comptez quelques heures par téraoctet ; le regroupement peut être mis en pause et repris.
 
+### Changer un seul disque
+
+Un disque de l'archive est trop grand pour ce qu'il contient (ou commence à vieillir) ? À l'étape 1,
+**« Déplacer un disque vers un autre… »** : choisissez le disque (par exemple `ARCHIVE-2`), puis le
+nouveau, qui peut être **plus petit** s'il a la place pour son contenu. Même prudence que le
+regroupement : tout est copié, chaque copie est relue, et seulement ensuite le nouveau disque prend la
+place de l'ancien, **sous le même nom** (collez-lui la même étiquette). Les autres disques ne changent
+pas. L'ancien disque est libéré : vous pouvez le formater.
+
+Pas de copier-coller dans l'Explorateur : rien n'y vérifie les copies, une coupure en plein milieu
+laisse l'archive à moitié déplacée, et le programme ne reconnaîtrait pas le nouveau disque.
+
 ### Être prévenu sur son téléphone 📱
 
 Pas besoin de surveiller l'écran : le programme peut vous envoyer un message sur votre téléphone quand

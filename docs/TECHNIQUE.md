@@ -106,6 +106,7 @@ python archive.py classer        -m F:\ArchiveFamiliale --modele A [--appliquer]
 python archive.py annuler-classement -m F:\ArchiveFamiliale
 python archive.py restaurer      -m F:\ArchiveFamiliale --disque ARCHIVE-2 --vers K:\ArchiveFamiliale
 python archive.py regrouper K:\ArchiveFamiliale -m F:\ArchiveFamiliale
+python archive.py deplacer-disque ARCHIVE-2 L:\ArchiveFamiliale -m F:\ArchiveFamiliale
 python archive.py reparer-catalogue --copie G:\ArchiveFamiliale\_catalogue\catalogue-copie.sqlite --vers K:\ArchiveFamiliale
 ```
 
@@ -130,6 +131,7 @@ python archive.py reparer-catalogue --copie G:\ArchiveFamiliale\_catalogue\catal
 | `annuler-classement` | Remet les fichiers à leur emplacement d'avant le dernier classement. |
 | `restaurer` | Reconstruit un disque de l'archive (mort ou remplacé) à partir des jeux de sauvegarde branchés. Reprise possible. |
 | `regrouper` | Copie toute l'archive (tous les disques `ARCHIVE-n`) sur un seul disque vide, plus grand, dans l'ordre physique de chaque disque et par le même travail à la chaîne que l'import ; vérifie chaque fichier lu par son empreinte (un fichier abîmé est signalé et non copié), puis relit chaque copie. Seulement quand TOUT est copié et relu : le catalogue est copié sur le nouveau disque et mis à jour (un seul disque d'archive, même identifiant qu'`ARCHIVE-1`), le reste de `_catalogue` suit, et les anciens disques sont libérés (`volume.json` et le catalogue renommés en `…-ancien`, lanceurs « Nos souvenirs » retirés, note « ANCIENNE ARCHIVE » posée). Reprise possible à tout moment (table `regroup`, fichier `_catalogue/regroupement.json` sur le disque cible). Les jeux de sauvegarde ne changent pas. |
+| `deplacer-disque` | Même mécanique que `regrouper`, pour UN disque de l'archive (`ARCHIVE-n`) vers un disque vide, plus petit ou plus grand (seule la place pour son contenu compte). À la fin, le nouveau disque prend sa place : même identifiant, même nom, `volume.json` écrit, emplacement mis à jour dans le catalogue ; l'ancien est libéré comme pour un regroupement. Pour `ARCHIVE-1`, le catalogue part avec lui (même fin que `regrouper`, sans toucher aux autres disques). En cours : meta `regroup_volume` = identifiant du disque déplacé. |
 | `reparer-catalogue` | `ARCHIVE-1` perdu : réinstalle le catalogue à partir d'une copie de secours, puis `restaurer --disque ARCHIVE-1`. |
 
 Codes de sortie : `0` OK · `1` problèmes (détails affichés) · `2` erreur d'utilisation ·

@@ -45,7 +45,7 @@ import uuid
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 
-VERSION = "2.7.4"
+VERSION = "2.8.0"
 
 ARCHIVE_FOLDER = "ArchiveFamiliale"          # nom de dossier conseillé sur chaque disque
 CATALOG_DIR = "_catalogue"
@@ -326,7 +326,10 @@ class Progress:
     WINDOW = 20 * 60.0      # durée de la fenêtre glissante (s)
     SAMPLE = 5.0            # un échantillon toutes les 5 s au plus
 
-    def __init__(self, total_files: int, total_bytes: int):
+    def __init__(self, total_files: int, total_bytes: int, sizes: bool = True):
+        """sizes=False : étape qui compte des fichiers sans rien lire de volumineux (dates, renommages…) ;
+        total_bytes vaut alors le nombre de fichiers, et la ligne n'affiche ni tailles ni débits."""
+        self.sizes = sizes
         self.total_files = total_files
         self.total_bytes = total_bytes
         self.files = 0
@@ -421,9 +424,11 @@ class Progress:
         pct = 100.0 * done / self.total_bytes if self.total_bytes else 100.0
         rate, read_rate, eta = self.estimate(now)
         line = (f"  {pct:5.1f} %  {fmt_int(self.files)}/{fmt_int(self.total_files)} fichiers"
-                f"  {fmt_size(done)}/{fmt_size(self.total_bytes)}"
-                + (f"  lecture {fmt_size(read_rate or 0)}/s" if self.read_bytes else "")
+                + (f"  {fmt_size(done)}/{fmt_size(self.total_bytes)}" if self.sizes else "")
+                + (f"  lecture {fmt_size(read_rate)}/s" if self.read_bytes and read_rate is not None and self.sizes else "")
                 + f"  reste ~{fmt_duration(eta)}")
+        if not self.sizes:
+            rate = None   # des fichiers par seconde, pas des octets
         if Progress.hook:
             Progress.hook(pct / 100.0, line.strip(), rate, eta)
             return
@@ -2199,8 +2204,27 @@ def _process_entry(ar: Archive, label: str, root: str, e: Entry, copy: bool,
     st.copied += 1
     st.copied_bytes += e.size
     st.per_volume[vid] += e.size
-    if thumbs and parts is not None:
-        thumbs.submit(h2, e.rel, parts)
+    if parts is not None:
+        _remember_date(ar, e.rel, h2, parts)
+        if thumbs:
+            thumbs.submit(h2, e.rel, parts)
+
+
+def _remember_date(ar: Archive, name: str, h: str, parts):
+    """Date de prise de vue d'une photo ou d'une vidéo déjà en mémoire : le classement, le bilan et
+    « Nos souvenirs » n'auront pas à relire le fichier pour la trouver."""
+    import classement   # ici : classement importe ce module
+    if not classement.head_date_applies(name):
+        return
+    head, n = [], 0
+    for p in parts:
+        head.append(p)
+        n += len(p)
+        if n >= classement.HEAD_MAX:
+            break
+    d = classement.head_date(name, b"".join(head))
+    ar.db.execute("INSERT OR IGNORE INTO media_dates(hash,y,m,d,source,extracted_at) VALUES(?,?,?,?,?,?)",
+                  (h, *(d or (None, None, None)), "contenu" if d else "aucune", now_iso()))
 
 
 def _set_backlog(ar: Archive, set_id: str):
@@ -2941,37 +2965,60 @@ def cmd_regroup(args) -> int:
 def _regroup(ar: Archive, args) -> int:
     """Copie toute l'archive (tous ses disques) sur un seul disque, relit chaque copie, puis fait de ce
     disque le nouvel ARCHIVE-1 : les anciens disques peuvent alors être formatés. Reprend là où il
-    s'était arrêté. Les jeux de sauvegarde ne changent pas."""
+    s'était arrêté. Les jeux de sauvegarde ne changent pas.
+
+    Avec args.disque (« déplacer-disque ») : seul ce disque est copié sur le nouveau, qui prend sa place
+    (même nom, même rôle) ; les autres disques ne changent pas."""
     LAST_REGROUP.clear()
     dst = normalize_dir(args.dossier)
     ar.db.execute("CREATE TABLE IF NOT EXISTS regroup(path TEXT PRIMARY KEY COLLATE NOCASE, state TEXT NOT NULL)")
     current = find_regroup_target(ar.meta("regroup_target"), ar.archive_id)
-    if current and not same_path(current, dst):
-        raise UserError(f"Un regroupement vers {current} est déjà en cours. Reprenez-le (même disque), ou "
-                        f"effacez ce dossier pour en commencer un autre.")
-    if not current:
+    wanted = None
+    if getattr(args, "disque", None):
+        wanted = next((v for v in ar.volumes(MAIN_SET) if v["name"].casefold() == args.disque.casefold()), None)
+        if wanted is None:
+            raise UserError(f"« {args.disque} » n'est pas un disque de l'archive (disques : "
+                            f"{', '.join(v['name'] for v in ar.volumes(MAIN_SET))}).")
+    if current:
+        vid = ar.meta("regroup_volume")
+        if not same_path(current, dst) or (wanted and wanted["id"] != vid):
+            what = f"Un déplacement de « {ar.volume(vid)['name']} »" if vid else "Un regroupement"
+            raise UserError(f"{what} vers {current} est déjà en cours. Reprenez-le (même disque), ou "
+                            f"effacez ce dossier pour en commencer un autre.")
+        ar.set_meta("regroup_target", dst)   # la lettre a pu changer
+    else:
+        vid = wanted["id"] if wanted else None
         if read_marker(dst):
             raise UserError(f"{dst} est déjà un disque d'archive : choisissez un disque neuf (ou vide).")
         _check_new_volume_location(ar, dst, args.meme_disque)
         ar.db.execute("DELETE FROM regroup")
         os.makedirs(os.path.join(dst, CATALOG_DIR), exist_ok=True)
         with open(os.path.join(dst, CATALOG_DIR, REGROUP_MARKER), "w", encoding="utf-8") as f:
-            json.dump({"archive_id": ar.archive_id, "started": now_iso(),
-                       "info": "Regroupement de l'Archive Familiale en cours sur ce disque : ne pas modifier."},
+            json.dump({"archive_id": ar.archive_id, "volume_id": vid, "started": now_iso(),
+                       "info": "Copie de l'Archive Familiale en cours sur ce disque : ne pas modifier."},
                       f, indent=2, ensure_ascii=False)
         ar.set_meta("regroup_target", dst)
+        if vid:
+            ar.set_meta("regroup_volume", vid)
+        else:
+            ar.db.execute("DELETE FROM meta WHERE key='regroup_volume'")
         ar.db.commit()
-        log.info("Regroupement de l'archive vers %s", dst)
-    else:
-        ar.set_meta("regroup_target", dst)   # la lettre a pu changer
+        log.info("%s vers %s", f"Déplacement de {wanted['name']}" if vid else "Regroupement de l'archive", dst)
 
-    vols = ar.volumes(MAIN_SET)
+    vols = [v for v in ar.volumes(MAIN_SET) if not vid or v["id"] == vid]
     roots = ar.resolve_roots(MAIN_SET)
-    total_n, total_b = ar.db.execute("SELECT COUNT(*), COALESCE(SUM(size),0) FROM stored").fetchone()
+    only = " AND s.volume=?" if vid else ""
+    q_args = (vid,) if vid else ()
+    total_n, total_b = ar.db.execute("SELECT COUNT(*), COALESCE(SUM(size),0) FROM stored s WHERE 1" + only,
+                                     q_args).fetchone()
     left_n, left_b = ar.db.execute("SELECT COUNT(*), COALESCE(SUM(size),0) FROM stored s WHERE NOT EXISTS "
-                                   "(SELECT 1 FROM regroup r WHERE r.path=s.path)").fetchone()
-    free = volume_free(dst) - FREE_SPACE_MARGIN - PRIMARY_EXTRA_MARGIN
-    print(f"Regroupement de l'archive ({fmt_int(total_n)} fichiers, {fmt_size(total_b)}) sur {dst}")
+                                   "(SELECT 1 FROM regroup r WHERE r.path=s.path)" + only, q_args).fetchone()
+    free = volume_free(dst) - FREE_SPACE_MARGIN - (PRIMARY_EXTRA_MARGIN if vid in (None, ar.primary_id) else 0)
+    if vid:
+        print(f"Déplacement du disque « {vols[0]['name']} » ({fmt_int(total_n)} fichiers, {fmt_size(total_b)}) "
+              f"sur {dst}")
+    else:
+        print(f"Regroupement de l'archive ({fmt_int(total_n)} fichiers, {fmt_size(total_b)}) sur {dst}")
     for v in vols:
         r = roots.get(v["id"])
         print(f"  {v['name']:<12} " + (f"branché ({r})" if r else "NON BRANCHÉ"))
@@ -3034,7 +3081,7 @@ def _regroup(ar: Archive, args) -> int:
     # 2. Relecture de chaque copie
     if not interrupted:
         rows = ar.db.execute("SELECT r.path, s.hash, s.size FROM regroup r JOIN stored s ON s.path=r.path "
-                             "WHERE r.state='copied' ORDER BY r.path").fetchall()
+                             "WHERE r.state='copied'" + only + " ORDER BY r.path", q_args).fetchall()
         if rows:
             print(f"Relecture des copies ({fmt_int(len(rows))} fichiers)…")
             progress = Progress(len(rows), sum(r["size"] for r in rows))
@@ -3062,39 +3109,100 @@ def _regroup(ar: Archive, args) -> int:
             ar.commit()
 
     done_n = ar.db.execute("SELECT COUNT(*) FROM regroup r JOIN stored s ON s.path=r.path "
-                           "WHERE r.state='verified'").fetchone()[0]
+                           "WHERE r.state='verified'" + only, q_args).fetchone()[0]
+    task = "le déplacement" if vid else "le regroupement"
     print()
     print(f"Copiés cette fois : {fmt_int(st.copied)} ({fmt_size(st.copied_bytes)}) ; "
           f"copiés et vérifiés en tout : {fmt_int(done_n)} / {fmt_int(total_n)}")
     for s in st.error_samples:
         print(f"    ! {s}")
     if interrupted:
-        print("\nEn pause. Relancez le regroupement (même disque) : il reprendra là où il s'était arrêté.")
+        print(f"\nEn pause. Relancez {task} (même disque) : il reprendra là où il s'était arrêté.")
         return 130
     if missing:
-        print(f"\nBranchez aussi {', '.join(missing)}, puis relancez : le regroupement continuera avec ses fichiers.")
+        print(f"\nBranchez aussi {', '.join(missing)}, puis relancez : {task} continuera avec ses fichiers.")
         return 1
     if st.errors or done_n < total_n:
-        print("\nDes fichiers n'ont pas pu être copiés ou vérifiés : relancez le regroupement (il ne refait que "
+        print(f"\nDes fichiers n'ont pas pu être copiés ou vérifiés : relancez {task} (il ne refait que "
               "ceux-là). Les anciens disques restent l'archive tant que tout n'est pas vérifié.")
         return 1
-    return _finish_regroup(ar, dst)
+    if vid and vid != ar.primary_id:
+        return _finish_move(ar, dst, vid)
+    return _finish_regroup(ar, dst, vid)
 
 
-def _finish_regroup(ar: Archive, dst: str) -> int:
-    """Tout est copié et vérifié : le disque cible devient ARCHIVE-1, les anciens sont libérés."""
-    print("Tout est copié et vérifié. Le nouveau disque devient l'archive…")
-    now = now_iso()
-    roots = ar.resolve_roots(MAIN_SET)
-    old = [(v["name"], roots.get(v["id"])) for v in ar.volumes(MAIN_SET)]
-    old_ids = [v["id"] for v in ar.volumes(MAIN_SET) if v["id"] != ar.primary_id]
-    # Fichiers copiés puis renommés depuis par un classement : ces copies-là ne servent plus
-    for (p,) in ar.db.execute("SELECT path FROM regroup r WHERE NOT EXISTS "
-                              "(SELECT 1 FROM stored s WHERE s.path=r.path)").fetchall():
+def _drop_stale_copies(ar: Archive, dst: str, vid: str | None):
+    """Fichiers copiés puis renommés depuis par un classement (ou passés sur un autre disque) : ces
+    copies-là ne servent plus."""
+    for (p,) in ar.db.execute("SELECT path FROM regroup r WHERE NOT EXISTS (SELECT 1 FROM stored s WHERE "
+                              "s.path=r.path" + (" AND s.volume=?" if vid else "") + ")",
+                              (vid,) if vid else ()).fetchall():
         try:
             os.remove(lp(os.path.join(dst, to_os(p))))
         except OSError:
             pass
+
+
+def _copy_catalog_rest(src_cat: str, dst_cat: str, what: str):
+    """Le reste d'un dossier _catalogue : journal, « Nos souvenirs », programme."""
+    skip = {DB_NAME, DB_NAME + "-wal", DB_NAME + "-shm", MARKER_NAME, REGROUP_MARKER, CATALOG_COPY_NAME}
+    for name in os.listdir(src_cat):
+        if name in skip:
+            continue
+        s, d = os.path.join(src_cat, name), os.path.join(dst_cat, name)
+        try:
+            if os.path.isdir(s):
+                shutil.copytree(lp(s), lp(d), dirs_exist_ok=True)
+            else:
+                shutil.copy2(lp(s), lp(d))
+        except (OSError, shutil.Error) as e:
+            log.warning("%s : copie de %s impossible : %s", what, s, e)
+
+
+def _retire_disk(name: str, root: str, note: str) -> str:
+    """Ce disque ne fait plus partie de l'archive : il n'est plus reconnu, et un mot dit qu'on peut le
+    formater. Ses fichiers ne sont pas effacés. Renvoie sa lettre de lecteur (ou son dossier)."""
+    cat = os.path.join(root, CATALOG_DIR)
+    for a, b in ((MARKER_NAME, "volume-ancien.json"), (DB_NAME, "catalogue-ancien.sqlite"),
+                 (CATALOG_COPY_NAME, "catalogue-copie-ancien.sqlite")):
+        try:
+            os.replace(os.path.join(cat, a), os.path.join(cat, b))
+        except OSError:
+            pass
+    # Lanceurs de « Nos souvenirs » : celui de l'archive, et celui de la racine du disque s'il y mène
+    drive = drive_root_of(root)
+    launchers = [os.path.join(root, SOUVENIRS_LAUNCHER)]
+    if drive and same_path(os.path.dirname(os.path.normpath(root)), drive):
+        launchers.append(os.path.join(drive, SOUVENIRS_LAUNCHER))
+    for p in launchers:
+        try:
+            os.remove(lp(p))
+        except OSError:
+            pass
+    try:
+        with open(os.path.join(root, RETIRED_NOTE), "w", encoding="utf-8") as f:
+            f.write(f"Ce disque était « {name} » de l'Archive Familiale.\n\n{note}\n")
+    except OSError:
+        pass
+    return drive or root
+
+
+def _retired_note(dst: str, whole: bool) -> str:
+    what = "toute l'archive a été copiée et vérifiée" if whole else "le contenu de ce disque a été copié et vérifié"
+    return (f"Le {dt.datetime.now():%d/%m/%Y}, {what} sur un autre disque ({dst}). Ce disque n'en fait plus "
+            f"partie : vous pouvez l'effacer ou le formater.")
+
+
+def _finish_regroup(ar: Archive, dst: str, vid: str | None = None) -> int:
+    """Tout est copié et vérifié : le disque cible devient ARCHIVE-1, les anciens sont libérés.
+    vid (celui d'ARCHIVE-1) : seul ARCHIVE-1 a été copié, les autres disques ne changent pas."""
+    print("Tout est copié et vérifié. Le nouveau disque devient l'archive…")
+    now = now_iso()
+    roots = ar.resolve_roots(MAIN_SET)
+    moved = [v for v in ar.volumes(MAIN_SET) if not vid or v["id"] == vid]
+    old = [(v["name"], roots.get(v["id"])) for v in moved]
+    old_ids = [v["id"] for v in moved if v["id"] != ar.primary_id]
+    _drop_stale_copies(ar, dst, vid)
     # 1. Le catalogue, copié sur le nouveau disque puis mis à jour là-bas
     new_cat = os.path.join(dst, CATALOG_DIR)
     ar.snapshot_db(os.path.join(new_cat, DB_NAME))
@@ -3102,7 +3210,8 @@ def _finish_regroup(ar: Archive, dst: str) -> int:
     con = sqlite3.connect(os.path.join(new_cat, DB_NAME))
     try:
         q = ",".join("?" * len(old_ids))
-        con.execute("UPDATE stored SET volume=?, verified_at=?, verify_status='ok'", (ar.primary_id, now))
+        con.execute("UPDATE stored SET volume=?, verified_at=?, verify_status='ok' WHERE volume IN (?"
+                    + ",?" * len(old_ids) + ")", (ar.primary_id, now, ar.primary_id, *old_ids))
         if old_ids:
             con.execute(f"UPDATE moves SET volume=? WHERE volume IN ({q})", (ar.primary_id, *old_ids))
             con.execute(f"DELETE FROM volumes WHERE id IN ({q})", old_ids)
@@ -3110,24 +3219,14 @@ def _finish_regroup(ar: Archive, dst: str) -> int:
                     "last_verify=?, last_verify_status='ok' WHERE id=?",
                     (dst, subpath_of(dst), serial, vname, volume_total(dst), now, now, ar.primary_id))
         con.execute("DROP TABLE IF EXISTS regroup")
-        con.execute("DELETE FROM meta WHERE key IN ('regroup_target', 'master_serial', 'master_subpath')")
+        con.execute("DELETE FROM meta WHERE key IN ('regroup_target', 'regroup_volume', 'master_serial', "
+                    "'master_subpath')")
         con.execute("INSERT OR REPLACE INTO meta(key,value) VALUES('regrouped_at', ?)", (now,))
         con.commit()
     finally:
         con.close()
-    # 2. Le reste du dossier _catalogue : journal, copies du catalogue, « Nos souvenirs », programme
-    skip = {DB_NAME, DB_NAME + "-wal", DB_NAME + "-shm", MARKER_NAME, REGROUP_MARKER, CATALOG_COPY_NAME}
-    for name in os.listdir(ar.cat_dir):
-        if name in skip:
-            continue
-        s, d = os.path.join(ar.cat_dir, name), os.path.join(new_cat, name)
-        try:
-            if os.path.isdir(s):
-                shutil.copytree(lp(s), lp(d), dirs_exist_ok=True)
-            else:
-                shutil.copy2(lp(s), lp(d))
-        except (OSError, shutil.Error) as e:
-            log.warning("Regroupement : copie de %s impossible : %s", s, e)
+    # 2. Le reste du dossier _catalogue : journal, « Nos souvenirs », programme
+    _copy_catalog_rest(ar.cat_dir, new_cat, "Regroupement")
     prim = dict(ar.volume(ar.primary_id))
     write_marker(dst, ar.archive_id, prim)
     os.remove(os.path.join(new_cat, REGROUP_MARKER))
@@ -3135,36 +3234,9 @@ def _finish_regroup(ar: Archive, dst: str) -> int:
     # 3. Les anciens disques ne font plus partie de l'archive
     ar.close()
     ar.db = None
-    freed = []
-    for name, root in old:
-        if not root:
-            continue
-        cat = os.path.join(root, CATALOG_DIR)
-        for a, b in ((MARKER_NAME, "volume-ancien.json"), (DB_NAME, "catalogue-ancien.sqlite"),
-                     (CATALOG_COPY_NAME, "catalogue-copie-ancien.sqlite")):
-            try:
-                os.replace(os.path.join(cat, a), os.path.join(cat, b))
-            except OSError:
-                pass
-        # Lanceurs de « Nos souvenirs » : celui de l'archive, et celui de la racine du disque s'il y mène
-        drive = drive_root_of(root)
-        launchers = [os.path.join(root, SOUVENIRS_LAUNCHER)]
-        if drive and same_path(os.path.dirname(os.path.normpath(root)), drive):
-            launchers.append(os.path.join(drive, SOUVENIRS_LAUNCHER))
-        for p in launchers:
-            try:
-                os.remove(lp(p))
-            except OSError:
-                pass
-        try:
-            with open(os.path.join(root, RETIRED_NOTE), "w", encoding="utf-8") as f:
-                f.write(f"Ce disque était « {name} » de l'Archive Familiale.\n\n"
-                        f"Le {dt.datetime.now():%d/%m/%Y}, toute l'archive a été copiée et vérifiée sur un autre "
-                        f"disque ({dst}). Ce disque n'en fait plus partie : vous pouvez l'effacer ou le formater.\n")
-        except OSError:
-            pass
-        freed.append((name, drive_root_of(root) or root))
-    LAST_REGROUP.update(master=dst, freed=freed)
+    note = _retired_note(dst, whole=not vid)
+    freed = [(name, _retire_disk(name, root, note)) for name, root in old if root]
+    LAST_REGROUP.update(master=dst, freed=freed, moved=old[0][0] if vid else None)
     # 4. Copies de secours du catalogue sur les disques de sauvegarde branchés
     new = Archive(dst)
     try:
@@ -3173,11 +3245,48 @@ def _finish_regroup(ar: Archive, dst: str) -> int:
         new.sync_catalog_copies()
     finally:
         new.close()
-    print(f"\nRegroupement terminé : l'archive est maintenant sur {dst} (disque « ARCHIVE-1 »).")
-    print("Les anciens disques ne font plus partie de l'archive ; vous pouvez les formater :")
+    if vid:
+        print(f"\nDéplacement terminé : « ARCHIVE-1 » (avec le catalogue) est maintenant sur {dst}.")
+        print("L'ancien disque ne fait plus partie de l'archive ; vous pouvez le formater :")
+    else:
+        print(f"\nRegroupement terminé : l'archive est maintenant sur {dst} (disque « ARCHIVE-1 »).")
+        print("Les anciens disques ne font plus partie de l'archive ; vous pouvez les formater :")
     for name, where in freed:
         print(f"  {name} ({where})")
     print(f"Désormais, ouvrez l'archive avec : -m \"{dst}\"")
+    return 0
+
+
+def _finish_move(ar: Archive, dst: str, vid: str) -> int:
+    """Tout le contenu d'un disque (autre qu'ARCHIVE-1) est copié et vérifié : le nouveau disque prend
+    sa place, sous le même nom ; l'ancien est libéré. Le catalogue reste sur ARCHIVE-1."""
+    v = ar.volume(vid)
+    name = v["name"]
+    print(f"Tout est copié et vérifié. Le nouveau disque devient « {name} »…")
+    old_root = ar.resolve_roots(MAIN_SET).get(vid)
+    _drop_stale_copies(ar, dst, vid)
+    new_cat = os.path.join(dst, CATALOG_DIR)
+    if old_root:
+        _copy_catalog_rest(os.path.join(old_root, CATALOG_DIR), new_cat, "Déplacement")
+    now = now_iso()
+    vname, serial, _ = volume_info(dst)
+    ar.db.execute("UPDATE volumes SET root=?, subpath=?, volume_serial=?, volume_name=?, capacity=?, last_seen=?, "
+                  "last_verify=?, last_verify_status='ok' WHERE id=?",
+                  (dst, subpath_of(dst), serial, vname, volume_total(dst), now, now, vid))
+    ar.db.execute("UPDATE stored SET verified_at=?, verify_status='ok' WHERE volume=?", (now, vid))
+    ar.db.execute("DELETE FROM regroup")
+    ar.db.execute("DELETE FROM meta WHERE key IN ('regroup_target', 'regroup_volume')")
+    write_marker(dst, ar.archive_id, ar.volume(vid))
+    ar.db.commit()
+    os.remove(os.path.join(new_cat, REGROUP_MARKER))
+    log.info("Déplacement terminé : %s est maintenant sur %s", name, dst)
+    freed = [(name, _retire_disk(name, old_root, _retired_note(dst, whole=False)))] if old_root else []
+    LAST_REGROUP.update(master=ar.root, freed=freed, moved=name)
+    ar.sync_catalog_copies([MAIN_SET])
+    print(f"\nDéplacement terminé : « {name} » est maintenant sur {dst}. Collez-lui l'étiquette « {name} ».")
+    if freed:
+        print("L'ancien disque ne fait plus partie de l'archive ; vous pouvez le formater :")
+        print(f"  {freed[0][1]}")
     return 0
 
 
@@ -3199,6 +3308,7 @@ Exemples (Windows) :
   python archive.py verifier      -m F:\ArchiveFamiliale --jeu Sauvegarde-A
   python archive.py exporter      -m F:\ArchiveFamiliale
   python archive.py regrouper K:\ArchiveFamiliale -m F:\ArchiveFamiliale
+  python archive.py deplacer-disque ARCHIVE-2 L:\ArchiveFamiliale -m F:\ArchiveFamiliale
 
 Astuce : définissez ARCHIVE_MAITRE=F:\ArchiveFamiliale pour ne plus taper -m.
 """
@@ -3251,6 +3361,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     sp = sub.add_parser("regrouper", help="copier toute l'archive (tous ses disques) sur un seul disque plus grand, "
                                           "vérifier, puis libérer les anciens disques")
+    sp.add_argument("dossier", metavar="DOSSIER", help="dossier vide sur le nouveau disque, ex. K:\\ArchiveFamiliale")
+    master_opt(sp)
+    sp.add_argument("--meme-disque", action="store_true", help=argparse.SUPPRESS)
+    sp.set_defaults(func=cmd_regroup)
+
+    sp = sub.add_parser("deplacer-disque", help="copier UN disque de l'archive sur un autre disque (plus petit ou "
+                                                "plus grand), vérifier, puis libérer l'ancien")
+    sp.add_argument("disque", metavar="NOM", help="le disque à déplacer, ex. ARCHIVE-2")
     sp.add_argument("dossier", metavar="DOSSIER", help="dossier vide sur le nouveau disque, ex. K:\\ArchiveFamiliale")
     master_opt(sp)
     sp.add_argument("--meme-disque", action="store_true", help=argparse.SUPPRESS)
